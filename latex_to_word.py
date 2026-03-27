@@ -1057,8 +1057,10 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
         search_paths.extend(
             [
                 base_dir / raw,
+                base_dir / "media" / raw,
                 base_dir / "latex_assets" / "media" / raw,
                 base_dir.parent / raw,
+                base_dir.parent / "media" / raw,
             ]
         )
     if candidate.suffix:
