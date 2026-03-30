@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -12,6 +13,53 @@ from latex_to_word import DocxTemplateConverter
 
 APP_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = APP_DIR / "template.docx"
+KEYWORDS_PATH = APP_DIR / "PSEkeywords.txt"
+SCT_LOGO_PATH = APP_DIR / "systems-control-transactions.png"
+PSE_PRESS_LOGO_PATH = APP_DIR / "pse-press.png"
+
+
+def _load_approved_keywords() -> list[str]:
+    if not KEYWORDS_PATH.is_file():
+        return []
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for raw_line in KEYWORDS_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        for part in [item.strip() for item in raw_line.split("\t")]:
+            if not part:
+                continue
+            if part in seen:
+                continue
+            seen.add(part)
+            keywords.append(part)
+    return keywords
+
+
+def _latex_escape_text(value: str) -> str:
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+    }
+    return "".join(replacements.get(ch, ch) for ch in value)
+
+
+def _override_keywords_in_tex(tex_path: Path, selected_keywords: list[str]) -> None:
+    keyword_text = ", ".join(_latex_escape_text(keyword) for keyword in selected_keywords)
+    override = f"\\renewcommand{{\\PaperKeywords}}{{%\n{keyword_text}}}"
+    tex_source = tex_path.read_text(encoding="utf-8")
+    pattern = re.compile(r"\\(?:re)?newcommand\{\\PaperKeywords\}\{.*?\}", re.DOTALL)
+    if pattern.search(tex_source):
+        tex_source = pattern.sub(lambda _: override, tex_source, count=1)
+    elif "\\begin{document}" in tex_source:
+        tex_source = tex_source.replace("\\begin{document}", override + "\n\n\\begin{document}", 1)
+    else:
+        tex_source = tex_source.rstrip() + "\n\n" + override + "\n"
+    tex_path.write_text(tex_source, encoding="utf-8")
 
 
 def _visible_tex_members(archive_bytes: bytes) -> list[str]:
@@ -61,7 +109,7 @@ def _default_tex_choice(options: list[str]) -> str:
     return options[0]
 
 
-def _convert_archive(archive_bytes: bytes, selected_tex: str) -> tuple[bytes, str]:
+def _convert_archive(archive_bytes: bytes, selected_tex: str, selected_keywords: list[str] | None = None) -> tuple[bytes, str]:
     with tempfile.TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         extract_root = temp_dir / "latex_project"
@@ -71,6 +119,8 @@ def _convert_archive(archive_bytes: bytes, selected_tex: str) -> tuple[bytes, st
         tex_path = extract_root.joinpath(*PurePosixPath(selected_tex).parts)
         if not tex_path.is_file():
             raise FileNotFoundError(f"Selected TeX file was not found after extraction: {selected_tex}")
+        if selected_keywords:
+            _override_keywords_in_tex(tex_path, selected_keywords)
 
         output_name = f"{tex_path.stem}-from-latex.docx"
         output_path = temp_dir / output_name
@@ -84,17 +134,74 @@ def _convert_archive(archive_bytes: bytes, selected_tex: str) -> tuple[bytes, st
         return output_path.read_bytes(), output_name
 
 
+def _render_hero() -> None:
+    st.markdown(
+        """
+        <style>
+        .pse-hero {
+            padding: 1.2rem 1.25rem 1.1rem 1.25rem;
+            border: 1px solid rgba(10, 85, 168, 0.18);
+            border-radius: 20px;
+            background:
+                linear-gradient(135deg, rgba(8, 88, 170, 0.08), rgba(255, 255, 255, 0.95) 42%),
+                linear-gradient(180deg, rgba(6, 170, 178, 0.06), rgba(255, 255, 255, 0.99));
+            margin-bottom: 1.2rem;
+        }
+        .pse-hero-kicker {
+            display: inline-block;
+            padding: 0.28rem 0.62rem;
+            border-radius: 999px;
+            background: rgba(6, 170, 178, 0.12);
+            color: #0a5aa8;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            margin-bottom: 0.7rem;
+        }
+        .pse-hero-title {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.08;
+            color: #0b3a75;
+            margin: 0 0 0.45rem 0;
+        }
+        .pse-hero-copy {
+            font-size: 1rem;
+            line-height: 1.55;
+            color: #213547;
+            margin: 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="pse-hero">', unsafe_allow_html=True)
+    col_left, col_body, col_right = st.columns([1.9, 3.3, 1.0], vertical_alignment="center")
+    with col_left:
+        if SCT_LOGO_PATH.is_file():
+            st.image(str(SCT_LOGO_PATH), use_container_width=True)
+    with col_body:
+        st.markdown('<div class="pse-hero-kicker">PSE Press Workflow</div>', unsafe_allow_html=True)
+        st.markdown('<div class="pse-hero-title">LaTeX to Word Converter</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="pse-hero-copy">Upload a LaTeX project archive and generate a Word manuscript that preserves the PSE Press template structure while rebuilding the editable content sections.</p>',
+            unsafe_allow_html=True,
+        )
+    with col_right:
+        if PSE_PRESS_LOGO_PATH.is_file():
+            st.image(str(PSE_PRESS_LOGO_PATH), use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 st.set_page_config(
     page_title="LaTeX to Word Converter",
     page_icon="📄",
     layout="centered",
 )
 
-st.title("LaTeX to Word Converter")
-st.write(
-    "Upload a zip archive containing your LaTeX manuscript files, and this app will "
-    "generate a Word document using the bundled `template.docx` and the existing template-aware converter."
-)
+_render_hero()
 
 with st.expander("What to include in the zip", expanded=True):
     st.markdown(
@@ -107,6 +214,8 @@ with st.expander("What to include in the zip", expanded=True):
 if not TEMPLATE_PATH.is_file():
     st.error(f"Missing bundled template: {TEMPLATE_PATH}")
     st.stop()
+
+approved_keywords = _load_approved_keywords()
 
 uploaded_file = st.file_uploader(
     "Upload a zip archive",
@@ -134,10 +243,38 @@ if uploaded_file is not None:
         help="If your archive contains multiple `.tex` files, choose the manuscript entry point.",
     )
 
+    keyword_mode = st.radio(
+        "Keywords",
+        options=("Use keywords already in manuscript", "Choose approved keywords for this conversion"),
+        index=0,
+        help="Leave the manuscript keywords unchanged, or override them for this conversion using the approved list.",
+    )
+
+    selected_keywords: list[str] = []
+    if keyword_mode == "Choose approved keywords for this conversion":
+        if not approved_keywords:
+            st.error(f"Approved keyword list is missing or empty: {KEYWORDS_PATH}")
+            st.stop()
+        selected_keywords = st.multiselect(
+            "Approved keywords",
+            options=approved_keywords,
+            default=[],
+            max_selections=5,
+            help="Select up to 5 approved keywords from `PSEkeywords.txt`.",
+        )
+        st.caption("Choose up to 5 approved keywords, or switch back to the manuscript option above.")
+
     if st.button("Convert to Word", type="primary"):
+        if keyword_mode == "Choose approved keywords for this conversion" and not selected_keywords:
+            st.error("Select at least one approved keyword, or use the manuscript keywords option.")
+            st.stop()
         with st.spinner("Converting the archive to DOCX..."):
             try:
-                output_bytes, output_name = _convert_archive(archive_bytes, selected_tex)
+                output_bytes, output_name = _convert_archive(
+                    archive_bytes,
+                    selected_tex,
+                    selected_keywords if keyword_mode == "Choose approved keywords for this conversion" else None,
+                )
             except Exception as exc:
                 st.error("Conversion failed.")
                 st.exception(exc)
