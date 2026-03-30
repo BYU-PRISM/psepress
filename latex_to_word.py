@@ -52,6 +52,20 @@ def normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def normalize_tex_quotes(value: str) -> str:
+    return value.replace("``", "“").replace("''", "”")
+
+
+def strip_leading_tex_comment_lines(value: str) -> str:
+    cleaned = value.lstrip()
+    while cleaned.startswith("%"):
+        line, _, remainder = cleaned.partition("\n")
+        if line.strip("% ").strip():
+            break
+        cleaned = remainder.lstrip()
+    return cleaned.lstrip()
+
+
 def split_tex_lines(value: str) -> list[str]:
     parts: list[str] = []
     current: list[str] = []
@@ -868,7 +882,7 @@ class InlineLatexConverter:
     def to_runs(self, text: str) -> list[RunSpec]:
         runs: list[RunSpec] = []
         i = 0
-        text = text.replace("\r", "")
+        text = normalize_tex_quotes(text.replace("\r", ""))
         while i < len(text):
             if text[i] == "%" and (i == 0 or text[i - 1] != "\\"):
                 while i < len(text) and text[i] != "\n":
@@ -922,6 +936,10 @@ class InlineLatexConverter:
                 inner, pos = parse_braced(text, i + len(command))
                 self._append_run(runs, self.to_plain(inner), italic=True)
                 i = pos
+                continue
+            if text.startswith("\\textcopyright", i):
+                self._append_run(runs, "©")
+                i += len("\\textcopyright")
                 continue
             if text.startswith("\\string\\", i):
                 j = i + len("\\string\\")
@@ -1087,8 +1105,15 @@ def compute_column_widths(rows: list[list[str]], col_count: int) -> list[int]:
 
 
 def looks_numeric(value: str) -> bool:
-    candidate = normalize_space(value).lower()
-    return bool(candidate) and all(ch in "0123456789.,-+/%() kmolhr" for ch in candidate)
+    candidate = normalize_space(value)
+    if not candidate:
+        return False
+    return bool(
+        re.fullmatch(
+            r"\(?[-+]?(?:\d+(?:,\d{3})*|\d*\.\d+|\d+)(?:\s*(?:[%°]|[A-Za-zµ°][A-Za-z0-9µ°/%^.+-]*))*\)?",
+            candidate,
+        )
+    )
 
 
 def parse_png_size(path: Path) -> tuple[int, int]:
@@ -1229,7 +1254,6 @@ class DocxTemplateConverter:
         media = MediaManager(package_entries, self.rel_root, content_tree.getroot())
 
         self._build_document(doc_tree.getroot(), media)
-        self._update_headers_and_footers(package_entries)
 
         package_entries["word/document.xml"] = ET.tostring(doc_tree.getroot(), encoding="utf-8", xml_declaration=True)
         package_entries["word/_rels/document.xml.rels"] = ET.tostring(rel_tree.getroot(), encoding="utf-8", xml_declaration=True)
@@ -1281,31 +1305,42 @@ class DocxTemplateConverter:
             body.remove(child)
 
         metadata = self.parsed.metadata
-        body.append(self._paragraph("PSETitle", self.inline.to_runs(metadata["PaperTitle"])))
-        body.append(self._paragraph("PSEAuthorList", self.inline.to_runs(metadata["PaperAuthors"])))
-        for line in split_tex_lines(metadata["PaperAffiliations"]):
-            body.append(self._paragraph("PSEAuthorAffiliation", self.inline.to_runs(line)))
+        title_text = strip_leading_tex_comment_lines(metadata["PaperTitle"])
+        authors_text = strip_leading_tex_comment_lines(metadata["PaperAuthors"])
+        affiliations_text = strip_leading_tex_comment_lines(metadata["PaperAffiliations"])
+        abstract_text = strip_leading_tex_comment_lines(metadata["PaperAbstract"])
+        keywords_text = strip_leading_tex_comment_lines(metadata["PaperKeywords"])
+        copyright_text = strip_leading_tex_comment_lines(metadata["PaperCopyrightText"])
+
+        body.append(self._paragraph("PSETitle", self.inline.to_runs(title_text)))
+        body.append(self._paragraph("PSEAuthorList", self.inline.to_runs(authors_text)))
+        for line in split_tex_lines(affiliations_text):
+            body.append(self._paragraph("PSEAuthorAffiliation", self._affiliation_runs(line)))
         body.append(self._paragraph("PSEAbstractHead", self.inline.to_runs("Abstract")))
-        body.append(self._paragraph("PSEAbstractText", self.inline.to_runs(metadata["PaperAbstract"])))
-        body.append(self._paragraph("PSEKeywords", self.inline.to_runs(f"Keywords: {metadata['PaperKeywords']}")))
+        body.append(self._paragraph("PSEAbstractText", self.inline.to_runs(abstract_text)))
+        body.append(self._paragraph("PSEKeywords", self.inline.to_runs(f"Keywords: {keywords_text}")))
         body.append(self._section_break_paragraph())
 
         figure_index = 0
         table_index = 0
         equation_index = 0
+        current_section = ""
         for block in self.parsed.blocks:
             if isinstance(block, HeadingBlock):
+                current_section = normalize_space(self.inline.to_plain(block.title)).lower()
                 style = {1: "PSEHead1", 2: "PSEHead2", 3: "PSEHead3", 4: "PSEHead4"}[block.level]
                 body.append(self._paragraph(style, self.inline.to_runs(block.title)))
             elif isinstance(block, ParagraphBlock):
-                body.append(self._paragraph("PSEText", self.inline.to_runs(block.text)))
+                style = "PSEAuthorIdentifiers" if current_section == "author identifiers" else "PSEText"
+                body.append(self._paragraph(style, self.inline.to_runs(block.text.lstrip())))
             elif isinstance(block, FigureBlock):
                 figure_index += 1
                 image_path = resolve_image_path(self.tex_path.parent, block.path)
                 rel_id = media.add_image(image_path)
                 body.append(self._figure_paragraph(rel_id, image_path, block.width_hint, block.wide))
-                caption = f"Figure {figure_index}. {self.inline.to_plain(block.caption)}"
-                body.append(self._paragraph("PSEFigureAndCaption", self.inline.to_runs(caption)))
+                caption_runs = [RunSpec(f"Figure {figure_index}. ", bold=True)]
+                caption_runs.extend(self.inline.to_runs(block.caption.lstrip()))
+                body.append(self._paragraph("PSEFigureAndCaption", caption_runs))
             elif isinstance(block, TableBlock):
                 table_index += 1
                 caption = f"Table {table_index}: {self.inline.to_plain(block.caption)}"
@@ -1325,7 +1360,7 @@ class DocxTemplateConverter:
                 for entry in self._selected_bib_entries():
                     body.append(self._paragraph("PSECitation", self.inline.to_runs(self._format_bib_entry(entry))))
             elif isinstance(block, CommandBlock) and block.name == "copyright":
-                body.append(self._paragraph("PSECopyright", self.inline.to_runs(metadata["PaperCopyrightText"])))
+                body.append(self._paragraph("PSECopyright", self.inline.to_runs(copyright_text)))
                 body.append(self._copyright_logo_paragraph())
 
         body.append(self.final_section if self.final_section is not None else ET.Element(qn("w", "sectPr")))
@@ -1335,6 +1370,35 @@ class DocxTemplateConverter:
             return self.bib_entries
         cited = set(self.parsed.cited_keys)
         return [entry for entry in self.bib_entries if entry.key in cited]
+
+    def _affiliation_runs(self, line: str) -> list[RunSpec]:
+        return self.inline.to_runs(self._sanitize_corresponding_author_line(line.lstrip()))
+
+    def _sanitize_corresponding_author_line(self, line: str) -> str:
+        if "Corresponding Author:" not in line or line.count("@") != 1:
+            return line
+
+        def clean_email(value: str) -> str:
+            return value.strip().rstrip(".;,")
+
+        href_pattern = re.compile(r"\\href\{mailto:(?P<email>[^}]+)\}\{(?P<label>[^}]+)\}")
+        href_match = href_pattern.search(line)
+        if href_match is not None:
+            email = clean_email(href_match.group("email"))
+            label = clean_email(href_match.group("label")) or email
+            cleaned = f"\\href{{mailto:{email}}}{{{label}}}"
+            remainder = line[href_match.end() :]
+            remainder = remainder[1:] if remainder.startswith(".") else remainder
+            return line[: href_match.start()] + cleaned + remainder
+
+        plain_email = re.search(r"(?P<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})(?P<trailing>\.)?", line)
+        if plain_email is None:
+            return line
+        email = clean_email(plain_email.group("email"))
+        replacement = f"\\href{{mailto:{email}}}{{{email}}}"
+        suffix = line[plain_email.end() :]
+        suffix = suffix[1:] if plain_email.group("trailing") and suffix.startswith(".") else suffix
+        return line[: plain_email.start()] + replacement + suffix
 
     def _format_bib_entry(self, entry: BibEntry) -> str:
         fields = entry.fields
