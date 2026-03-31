@@ -23,6 +23,8 @@ streamlit run app.py
 2. In Streamlit Community Cloud, create a new app from that repo.
 3. Set the main file path to `app.py`.
 
+See streamlit app at [https://psepress.streamlit.app](https://psepress.streamlit.app) to use the online form.
+
 ## Upload format
 
 Upload a `.zip` archive that includes:
