@@ -31,6 +31,8 @@ W16SE_NS = "http://schemas.microsoft.com/office/word/2015/wordml/symex"
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 XMLNS_NS = "http://www.w3.org/2000/xmlns/"
+EMU_PER_CM = 360000
+DEFAULT_DPI = 96.0
 
 NS = {
     "w": W_NS,
@@ -1176,6 +1178,29 @@ def parse_png_size(path: Path) -> tuple[int, int]:
     return width, height
 
 
+def parse_png_dpi(path: Path) -> tuple[float, float] | None:
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    offset = 8
+    while offset + 12 <= len(data):
+        chunk_length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        chunk_data_start = offset + 8
+        chunk_data_end = chunk_data_start + chunk_length
+        if chunk_data_end + 4 > len(data):
+            break
+        if chunk_type == b"pHYs" and chunk_length >= 9:
+            pixels_per_unit_x = struct.unpack(">I", data[chunk_data_start : chunk_data_start + 4])[0]
+            pixels_per_unit_y = struct.unpack(">I", data[chunk_data_start + 4 : chunk_data_start + 8])[0]
+            unit_specifier = data[chunk_data_start + 8]
+            if unit_specifier == 1:
+                return pixels_per_unit_x * 0.0254, pixels_per_unit_y * 0.0254
+            return None
+        offset = chunk_data_end + 4
+    return None
+
+
 def parse_gif_size(path: Path) -> tuple[int, int]:
     data = path.read_bytes()
     width, height = struct.unpack("<HH", data[6:10])
@@ -1201,6 +1226,38 @@ def parse_jpeg_size(path: Path) -> tuple[int, int]:
     raise ValueError("Could not determine JPEG dimensions.")
 
 
+def parse_jpeg_dpi(path: Path) -> tuple[float, float] | None:
+    data = path.read_bytes()
+    if data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i + 4 <= len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker == 0xD9:
+            break
+        if marker in {0xD8, 0x01} or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        length = struct.unpack(">H", data[i + 2 : i + 4])[0]
+        if i + 2 + length > len(data):
+            break
+        segment = data[i + 4 : i + 2 + length]
+        if marker == 0xE0 and segment.startswith(b"JFIF\x00") and len(segment) >= 14:
+            units = segment[7]
+            x_density = struct.unpack(">H", segment[8:10])[0]
+            y_density = struct.unpack(">H", segment[10:12])[0]
+            if units == 1:
+                return float(x_density), float(y_density)
+            if units == 2:
+                return x_density * 2.54, y_density * 2.54
+            return None
+        i += 2 + length
+    return None
+
+
 def image_size(path: Path) -> tuple[int, int]:
     suffix = path.suffix.lower()
     if suffix == ".png":
@@ -1212,10 +1269,26 @@ def image_size(path: Path) -> tuple[int, int]:
     raise ValueError(f"Unsupported image format for sizing: {path.suffix}")
 
 
-def parse_width_hint(width_hint: str | None, wide: bool) -> int:
+def image_dpi(path: Path) -> tuple[float, float]:
+    suffix = path.suffix.lower()
+    dpi: tuple[float, float] | None = None
+    if suffix == ".png":
+        dpi = parse_png_dpi(path)
+    elif suffix in {".jpg", ".jpeg"}:
+        dpi = parse_jpeg_dpi(path)
+    if dpi is None:
+        return DEFAULT_DPI, DEFAULT_DPI
+    x_dpi, y_dpi = dpi
+    return (
+        x_dpi if x_dpi > 0 else DEFAULT_DPI,
+        y_dpi if y_dpi > 0 else DEFAULT_DPI,
+    )
+
+
+def parse_width_hint_cm(width_hint: str | None, wide: bool) -> float:
     max_cm = 17.0 if wide else 8.5
     if not width_hint:
-        return int(max_cm * 360000)
+        return max_cm
     match = re.search(r"width\s*=\s*([0-9.]+)\s*(cm|mm|in|pt)", width_hint)
     if match:
         value = float(match.group(1))
@@ -1228,17 +1301,21 @@ def parse_width_hint(width_hint: str | None, wide: bool) -> int:
             cm = value * 2.54
         else:
             cm = value * 0.0352778
-        return int(cm * 360000)
+        return cm
     if "\\columnwidth" in width_hint:
-        return int(8.5 * 360000)
+        return 8.5
     if "\\textwidth" in width_hint:
-        return int((17.0 if wide else 17.5) * 360000)
-    return int(max_cm * 360000)
+        return 17.0 if wide else 17.5
+    return max_cm
 
 
 def compute_image_extent(path: Path, width_hint: str | None, wide: bool) -> tuple[int, int]:
     width_px, height_px = image_size(path)
-    width_emu = parse_width_hint(width_hint, wide)
+    x_dpi, _ = image_dpi(path)
+    native_width_cm = (width_px / max(x_dpi, 1.0)) * 2.54
+    requested_width_cm = parse_width_hint_cm(width_hint, wide)
+    width_cm = max(3.0, min(requested_width_cm, max(native_width_cm, 3.0)))
+    width_emu = int(width_cm * EMU_PER_CM)
     height_emu = max(1, int(width_emu * height_px / max(1, width_px)))
     return width_emu, height_emu
 
