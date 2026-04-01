@@ -205,7 +205,7 @@ def _render_hero() -> None:
     col_left, col_body, col_right = st.columns([1.9, 3.3, 1.0], vertical_alignment="center")
     with col_left:
         if SCT_LOGO_PATH.is_file():
-            st.image(str(SCT_LOGO_PATH), use_container_width=True)
+            st.image(str(SCT_LOGO_PATH), width="stretch")
     with col_body:
         st.markdown('<div class="pse-hero-kicker">PSE Press Workflow</div>', unsafe_allow_html=True)
         st.markdown('<div class="pse-hero-title">LaTeX to Word Converter</div>', unsafe_allow_html=True)
@@ -215,7 +215,7 @@ def _render_hero() -> None:
         )
     with col_right:
         if PSE_PRESS_LOGO_PATH.is_file():
-            st.image(str(PSE_PRESS_LOGO_PATH), use_container_width=True)
+            st.image(str(PSE_PRESS_LOGO_PATH), width="stretch")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
