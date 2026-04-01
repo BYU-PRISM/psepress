@@ -48,6 +48,30 @@ def _latex_escape_text(value: str) -> str:
     return "".join(replacements.get(ch, ch) for ch in value)
 
 
+def _parse_keyword_text(value: str) -> list[str]:
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for raw_part in re.split(r"[,;\r\n]+", value):
+        keyword = raw_part.strip()
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        keywords.append(keyword)
+    return keywords
+
+
+def _merge_keywords(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for keyword in group:
+            if keyword in seen:
+                continue
+            seen.add(keyword)
+            merged.append(keyword)
+    return merged
+
+
 def _override_keywords_in_tex(tex_path: Path, selected_keywords: list[str]) -> None:
     keyword_text = ", ".join(_latex_escape_text(keyword) for keyword in selected_keywords)
     override = f"\\renewcommand{{\\PaperKeywords}}{{%\n{keyword_text}}}"
@@ -245,35 +269,45 @@ if uploaded_file is not None:
 
     keyword_mode = st.radio(
         "Keywords",
-        options=("Use keywords already in manuscript", "Choose approved keywords for this conversion"),
+        options=("Use keywords already in manuscript", "Set keywords for this conversion"),
         index=0,
-        help="Leave the manuscript keywords unchanged, or override them for this conversion using the approved list.",
+        help="Leave the manuscript keywords unchanged, or override them for this conversion with recommended and/or custom keywords.",
     )
 
     selected_keywords: list[str] = []
-    if keyword_mode == "Choose approved keywords for this conversion":
-        if not approved_keywords:
-            st.error(f"Approved keyword list is missing or empty: {KEYWORDS_PATH}")
-            st.stop()
-        selected_keywords = st.multiselect(
-            "Approved keywords",
-            options=approved_keywords,
-            default=[],
-            max_selections=5,
-            help="Select up to 5 approved keywords from `PSEkeywords.txt`.",
+    additional_keywords_text = ""
+    if keyword_mode == "Set keywords for this conversion":
+        if approved_keywords:
+            selected_keywords = st.multiselect(
+                "Recommended keywords",
+                options=approved_keywords,
+                default=[],
+                help="Optional suggestions from `PSEkeywords.txt`. You can choose any number.",
+            )
+        additional_keywords_text = st.text_area(
+            "Other keywords",
+            value="",
+            height=110,
+            help="Add any keywords you want. Separate them with commas or new lines.",
+            placeholder="Example: Process Safety, Digital Twins, New custom keyword",
         )
-        st.caption("Choose up to 5 approved keywords, or switch back to the manuscript option above.")
+        final_keywords = _merge_keywords(selected_keywords, _parse_keyword_text(additional_keywords_text))
+        if final_keywords:
+            st.caption("Keywords to use for this conversion: " + ", ".join(final_keywords))
+        else:
+            st.caption("Choose any recommended keywords and/or type your own custom keywords.")
 
     if st.button("Convert to Word", type="primary"):
-        if keyword_mode == "Choose approved keywords for this conversion" and not selected_keywords:
-            st.error("Select at least one approved keyword, or use the manuscript keywords option.")
+        final_keywords = _merge_keywords(selected_keywords, _parse_keyword_text(additional_keywords_text))
+        if keyword_mode == "Set keywords for this conversion" and not final_keywords:
+            st.error("Add at least one keyword, or use the manuscript keywords option.")
             st.stop()
         with st.spinner("Converting the archive to DOCX..."):
             try:
                 output_bytes, output_name = _convert_archive(
                     archive_bytes,
                     selected_tex,
-                    selected_keywords if keyword_mode == "Choose approved keywords for this conversion" else None,
+                    final_keywords if keyword_mode == "Set keywords for this conversion" else None,
                 )
             except Exception as exc:
                 st.error("Conversion failed.")

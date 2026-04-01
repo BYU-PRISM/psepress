@@ -19,8 +19,18 @@ A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 PIC_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
 WP14_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+W15_NS = "http://schemas.microsoft.com/office/word/2012/wordml"
+W16CEX_NS = "http://schemas.microsoft.com/office/word/2018/wordml/cex"
+W16CID_NS = "http://schemas.microsoft.com/office/word/2016/wordml/cid"
+W16_NS = "http://schemas.microsoft.com/office/word/2018/wordml"
+W16DU_NS = "http://schemas.microsoft.com/office/word/2023/wordml/word16du"
+W16SDTDH_NS = "http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash"
+W16SDTFL_NS = "http://schemas.microsoft.com/office/word/2024/wordml/sdtformatlock"
+W16SE_NS = "http://schemas.microsoft.com/office/word/2015/wordml/symex"
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+XMLNS_NS = "http://www.w3.org/2000/xmlns/"
 
 NS = {
     "w": W_NS,
@@ -32,6 +42,7 @@ NS = {
     "pic": PIC_NS,
     "w14": W14_NS,
     "wp14": WP14_NS,
+    "mc": MC_NS,
     "m": M_NS,
 }
 
@@ -43,13 +54,49 @@ for prefix, uri in (
     ("pic", PIC_NS),
     ("w14", W14_NS),
     ("wp14", WP14_NS),
+    ("mc", MC_NS),
+    ("w15", W15_NS),
+    ("w16cex", W16CEX_NS),
+    ("w16cid", W16CID_NS),
+    ("w16", W16_NS),
+    ("w16du", W16DU_NS),
+    ("w16sdtdh", W16SDTDH_NS),
+    ("w16sdtfl", W16SDTFL_NS),
+    ("w16se", W16SE_NS),
     ("m", M_NS),
 ):
     ET.register_namespace(prefix, uri)
 
+IGNORABLE_PREFIXES = "w14 w15 w16se w16cid w16 w16cex w16sdtdh w16sdtfl w16du wp14"
+EXTRA_DOCUMENT_NAMESPACES = {
+    "mc": MC_NS,
+    "w15": W15_NS,
+    "w16cex": W16CEX_NS,
+    "w16cid": W16CID_NS,
+    "w16": W16_NS,
+    "w16du": W16DU_NS,
+    "w16sdtdh": W16SDTDH_NS,
+    "w16sdtfl": W16SDTFL_NS,
+    "w16se": W16SE_NS,
+}
+
 
 def qn(prefix: str, local: str) -> str:
     return f"{{{NS[prefix]}}}{local}"
+
+
+def serialize_xml(root: ET.Element, *, default_namespace: str | None = None) -> bytes:
+    if default_namespace is not None:
+        ET.register_namespace("", default_namespace)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def serialize_document_xml(root: ET.Element) -> bytes:
+    root.set(f"{{{MC_NS}}}Ignorable", IGNORABLE_PREFIXES)
+    xml_text = serialize_xml(root).decode("utf-8")
+    namespace_insert = "".join(f' xmlns:{prefix}="{uri}"' for prefix, uri in EXTRA_DOCUMENT_NAMESPACES.items() if prefix != "mc")
+    xml_text = re.sub(r"<w:document\b", "<w:document" + namespace_insert, xml_text, count=1)
+    return xml_text.encode("utf-8")
 
 
 def normalize_space(value: str) -> str:
@@ -1259,9 +1306,9 @@ class DocxTemplateConverter:
 
         self._build_document(doc_tree.getroot(), media)
 
-        package_entries["word/document.xml"] = ET.tostring(doc_tree.getroot(), encoding="utf-8", xml_declaration=True)
-        package_entries["word/_rels/document.xml.rels"] = ET.tostring(rel_tree.getroot(), encoding="utf-8", xml_declaration=True)
-        package_entries["[Content_Types].xml"] = ET.tostring(content_tree.getroot(), encoding="utf-8", xml_declaration=True)
+        package_entries["word/document.xml"] = serialize_document_xml(doc_tree.getroot())
+        package_entries["word/_rels/document.xml.rels"] = serialize_xml(rel_tree.getroot(), default_namespace=REL_NS)
+        package_entries["[Content_Types].xml"] = serialize_xml(content_tree.getroot(), default_namespace=CT_NS)
 
         with zipfile.ZipFile(self.output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name in sorted(package_entries):
@@ -1662,7 +1709,7 @@ class DocxTemplateConverter:
         for extent in paragraph.findall(".//wp:extent", NS):
             extent.set("cx", str(width_emu))
             extent.set("cy", str(height_emu))
-        for ext in paragraph.findall(".//a:ext", NS):
+        for ext in paragraph.findall(".//a:xfrm/a:ext", NS):
             ext.set("cx", str(width_emu))
             ext.set("cy", str(height_emu))
         for blip in paragraph.findall(".//a:blip", NS):
