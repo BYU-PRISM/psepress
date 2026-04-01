@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import re
+import secrets
 import struct
 import zipfile
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 PIC_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 W14_NS = "http://schemas.microsoft.com/office/word/2010/wordml"
+WP14_NS = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 
@@ -29,6 +31,7 @@ NS = {
     "a": A_NS,
     "pic": PIC_NS,
     "w14": W14_NS,
+    "wp14": WP14_NS,
     "m": M_NS,
 }
 
@@ -39,6 +42,7 @@ for prefix, uri in (
     ("a", A_NS),
     ("pic", PIC_NS),
     ("w14", W14_NS),
+    ("wp14", WP14_NS),
     ("m", M_NS),
 ):
     ET.register_namespace(prefix, uri)
@@ -1318,7 +1322,10 @@ class DocxTemplateConverter:
             body.append(self._paragraph("PSEAuthorAffiliation", self._affiliation_runs(line)))
         body.append(self._paragraph("PSEAbstractHead", self.inline.to_runs("Abstract")))
         body.append(self._paragraph("PSEAbstractText", self.inline.to_runs(abstract_text)))
-        body.append(self._paragraph("PSEKeywords", self.inline.to_runs(f"Keywords: {keywords_text}")))
+        keyword_runs = [RunSpec("Keywords:", bold=True)]
+        if keywords_text:
+            keyword_runs.extend(self.inline.to_runs(f" {keywords_text.lstrip()}"))
+        body.append(self._paragraph("PSEKeywords", keyword_runs))
         body.append(self._section_break_paragraph())
 
         figure_index = 0
@@ -1343,8 +1350,9 @@ class DocxTemplateConverter:
                 body.append(self._paragraph("PSEFigureAndCaption", caption_runs))
             elif isinstance(block, TableBlock):
                 table_index += 1
-                caption = f"Table {table_index}: {self.inline.to_plain(block.caption)}"
-                body.append(self._paragraph("PSETableCaption", self.inline.to_runs(caption)))
+                caption_runs = [RunSpec(f"Table {table_index}: ", bold=True)]
+                caption_runs.extend(self.inline.to_runs(block.caption.lstrip()))
+                body.append(self._paragraph("PSETableCaption", caption_runs))
                 body.append(self._table_element(block.rows))
             elif isinstance(block, EquationBlock):
                 equation_index += 1
@@ -1375,8 +1383,10 @@ class DocxTemplateConverter:
         return self.inline.to_runs(self._sanitize_corresponding_author_line(line.lstrip()))
 
     def _sanitize_corresponding_author_line(self, line: str) -> str:
-        if "Corresponding Author:" not in line or line.count("@") != 1:
+        emails = re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", line)
+        if "Corresponding Author:" not in line or len(set(emails)) != 1:
             return line
+        line = re.sub(r"\\textsuperscript\{\*\}", "*", line, count=1)
 
         def clean_email(value: str) -> str:
             return value.strip().rstrip(".;,")
@@ -1646,6 +1656,7 @@ class DocxTemplateConverter:
         if self.figure_paragraph_template is None:
             raise ValueError("Figure template paragraph is unavailable.")
         paragraph = copy.deepcopy(self.figure_paragraph_template)
+        self._refresh_drawing_markup_ids(paragraph)
         self.max_docpr_id += 1
         width_emu, height_emu = compute_image_extent(image_path, width_hint, wide)
         for extent in paragraph.findall(".//wp:extent", NS):
@@ -1669,7 +1680,18 @@ class DocxTemplateConverter:
     def _copyright_logo_paragraph(self) -> ET.Element:
         if self.cc_logo_paragraph_template is None:
             raise ValueError("Copyright logo paragraph template is unavailable.")
-        return copy.deepcopy(self.cc_logo_paragraph_template)
+        paragraph = copy.deepcopy(self.cc_logo_paragraph_template)
+        self._refresh_drawing_markup_ids(paragraph)
+        return paragraph
+
+    def _refresh_drawing_markup_ids(self, paragraph: ET.Element) -> None:
+        anchor_attr = f"{{{WP14_NS}}}anchorId"
+        edit_attr = f"{{{WP14_NS}}}editId"
+        for node in paragraph.iter():
+            if anchor_attr in node.attrib:
+                node.set(anchor_attr, secrets.token_hex(4).upper())
+            if edit_attr in node.attrib:
+                node.set(edit_attr, secrets.token_hex(4).upper())
 
     def _table_element(self, rows: list[list[str]]) -> ET.Element:
         tbl = ET.Element(qn("w", "tbl"))
