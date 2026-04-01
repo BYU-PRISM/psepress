@@ -1314,7 +1314,7 @@ def compute_image_extent(path: Path, width_hint: str | None, wide: bool) -> tupl
     x_dpi, _ = image_dpi(path)
     native_width_cm = (width_px / max(x_dpi, 1.0)) * 2.54
     requested_width_cm = parse_width_hint_cm(width_hint, wide)
-    width_cm = max(3.0, min(requested_width_cm, max(native_width_cm, 3.0)))
+    width_cm = max(2.5, min(requested_width_cm, max(native_width_cm, 2.5)))
     width_emu = int(width_cm * EMU_PER_CM)
     height_emu = max(1, int(width_emu * height_px / max(1, width_px)))
     return width_emu, height_emu
