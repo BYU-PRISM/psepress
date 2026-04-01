@@ -33,6 +33,9 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 XMLNS_NS = "http://www.w3.org/2000/xmlns/"
 EMU_PER_CM = 360000
 DEFAULT_DPI = 96.0
+MIN_IMAGE_WIDTH_CM = 2.5
+MAX_COLUMN_IMAGE_WIDTH_CM = 8.5
+MAX_WIDE_IMAGE_WIDTH_CM = 17.0
 
 NS = {
     "w": W_NS,
@@ -1286,7 +1289,7 @@ def image_dpi(path: Path) -> tuple[float, float]:
 
 
 def parse_width_hint_cm(width_hint: str | None, wide: bool) -> float:
-    max_cm = 17.0 if wide else 8.5
+    max_cm = MAX_WIDE_IMAGE_WIDTH_CM if wide else MAX_COLUMN_IMAGE_WIDTH_CM
     if not width_hint:
         return max_cm
     match = re.search(r"width\s*=\s*([0-9.]+)\s*(cm|mm|in|pt)", width_hint)
@@ -1303,18 +1306,26 @@ def parse_width_hint_cm(width_hint: str | None, wide: bool) -> float:
             cm = value * 0.0352778
         return cm
     if "\\columnwidth" in width_hint:
-        return 8.5
+        return MAX_COLUMN_IMAGE_WIDTH_CM
     if "\\textwidth" in width_hint:
-        return 17.0 if wide else 17.5
+        return MAX_WIDE_IMAGE_WIDTH_CM if wide else 17.5
     return max_cm
+
+
+def native_image_width_cm(path: Path) -> float:
+    width_px, height_px = image_size(path)
+    x_dpi, y_dpi = image_dpi(path)
+    native_width_from_x = (width_px / max(x_dpi, 1.0)) * 2.54
+    native_height_from_y = (height_px / max(y_dpi, 1.0)) * 2.54
+    native_width_from_y = native_height_from_y * width_px / max(height_px, 1)
+    return min(native_width_from_x, native_width_from_y)
 
 
 def compute_image_extent(path: Path, width_hint: str | None, wide: bool) -> tuple[int, int]:
     width_px, height_px = image_size(path)
-    x_dpi, _ = image_dpi(path)
-    native_width_cm = (width_px / max(x_dpi, 1.0)) * 2.54
+    native_width_cm = native_image_width_cm(path)
     requested_width_cm = parse_width_hint_cm(width_hint, wide)
-    width_cm = max(2.5, min(requested_width_cm, max(native_width_cm, 2.5)))
+    width_cm = max(MIN_IMAGE_WIDTH_CM, min(requested_width_cm, max(native_width_cm, MIN_IMAGE_WIDTH_CM)))
     width_emu = int(width_cm * EMU_PER_CM)
     height_emu = max(1, int(width_emu * height_px / max(1, width_px)))
     return width_emu, height_emu
