@@ -193,7 +193,7 @@ def _render_hero() -> None:
         .pse-hero-copy {
             font-size: 1rem;
             line-height: 1.55;
-            color: #213547;
+            color: #f2f6fb;
             margin: 0;
         }
         </style>
