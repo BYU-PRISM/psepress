@@ -93,7 +93,7 @@ Model Reduction
 Modelling 
 Molten Carbonate Fuel Cells 
 Multiscale Modelling 
-Multivariate Statistics 	Syngas 
+Multivariate Statistics 	 
 Natural Gas 
 Nonlinear Model Predictive Control 
 Nonsmooth 
@@ -146,6 +146,7 @@ Stochastic Optimization
 Superstructure Optimization 
 Supply Chain 
 Surrogate Model 
+Syngas
 Synthetic Fuels 
 System Identification 
 Tanks 
