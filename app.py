@@ -162,21 +162,45 @@ def _render_hero() -> None:
     st.markdown(
         """
         <style>
+        :root {
+            --pse-hero-border: rgba(10, 85, 168, 0.18);
+            --pse-hero-background:
+                linear-gradient(135deg, rgba(8, 88, 170, 0.10), rgba(255, 255, 255, 0.96) 42%),
+                linear-gradient(180deg, rgba(6, 170, 178, 0.07), rgba(255, 255, 255, 0.99));
+            --pse-hero-shadow: 0 14px 34px rgba(10, 34, 66, 0.08);
+            --pse-hero-kicker-bg: rgba(6, 170, 178, 0.12);
+            --pse-hero-kicker-text: #0a5aa8;
+            --pse-hero-title: #0b3a75;
+            --pse-hero-copy: rgba(20, 34, 51, 0.90);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --pse-hero-border: rgba(113, 160, 224, 0.28);
+                --pse-hero-background:
+                    linear-gradient(135deg, rgba(18, 72, 132, 0.52), rgba(17, 24, 39, 0.96) 45%),
+                    linear-gradient(180deg, rgba(6, 170, 178, 0.18), rgba(17, 24, 39, 0.98));
+                --pse-hero-shadow: 0 18px 40px rgba(0, 0, 0, 0.30);
+                --pse-hero-kicker-bg: rgba(159, 216, 255, 0.12);
+                --pse-hero-kicker-text: #9fd8ff;
+                --pse-hero-title: #f2f6fb;
+                --pse-hero-copy: rgba(242, 246, 251, 0.92);
+            }
+        }
         .pse-hero {
             padding: 1.2rem 1.25rem 1.1rem 1.25rem;
-            border: 1px solid rgba(10, 85, 168, 0.18);
+            border: 1px solid var(--pse-hero-border);
             border-radius: 20px;
-            background:
-                linear-gradient(135deg, rgba(8, 88, 170, 0.08), rgba(255, 255, 255, 0.95) 42%),
-                linear-gradient(180deg, rgba(6, 170, 178, 0.06), rgba(255, 255, 255, 0.99));
+            background: var(--pse-hero-background);
+            box-shadow: var(--pse-hero-shadow);
             margin-bottom: 1.2rem;
+            color: var(--text-color, inherit);
         }
         .pse-hero-kicker {
             display: inline-block;
             padding: 0.28rem 0.62rem;
             border-radius: 999px;
-            background: rgba(6, 170, 178, 0.12);
-            color: #0a5aa8;
+            background: var(--pse-hero-kicker-bg);
+            color: var(--pse-hero-kicker-text);
             font-size: 0.82rem;
             font-weight: 700;
             letter-spacing: 0.02em;
@@ -187,13 +211,13 @@ def _render_hero() -> None:
             font-size: 2rem;
             font-weight: 700;
             line-height: 1.08;
-            color: #0b3a75;
+            color: var(--pse-hero-title);
             margin: 0 0 0.45rem 0;
         }
         .pse-hero-copy {
             font-size: 1rem;
             line-height: 1.55;
-            color: #f2f6fb;
+            color: var(--pse-hero-copy);
             margin: 0;
         }
         </style>
