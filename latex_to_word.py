@@ -204,6 +204,15 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def extract_label(text: str) -> tuple[str, str | None]:
+    match = re.search(r"\\label\{([^}]+)\}", text)
+    if match:
+        label = match.group(1)
+        text = text[:match.start()] + text[match.end():]
+        return text, label
+    return text, None
+
+
 def clean_bib_value(value: str) -> str:
     value = value.strip()
     if value.startswith("{") and value.endswith("}"):
@@ -239,15 +248,16 @@ def load_latex_source(tex_path: Path, seen: set[Path] | None = None) -> str:
         return load_latex_source(target_path, seen)
 
     return re.sub(r"\\(?:input|include)\{([^}]+)\}", replace, text)
-
-
 @dataclass
 class RunSpec:
     text: str
-    superscript: bool = False
-    hyperlink: str | None = None
     bold: bool = False
     italic: bool = False
+    superscript: bool = False
+    subscript: bool = False
+    smallcaps: bool = False
+    hyperlink: str | None = None
+    math_node: MathNode | None = None
 
 
 @dataclass
@@ -267,23 +277,37 @@ class FigureBlock:
     caption: str
     wide: bool = False
     width_hint: str | None = None
+    label: str | None = None
 
 
 @dataclass
 class TableBlock:
     caption: str
     rows: list[list[str]]
+    label: str | None = None
 
 
 @dataclass
 class EquationBlock:
-    body: str
+    text: str
+    label: str | None = None
 
 
 @dataclass
 class MathTextNode:
     text: str
     literal: bool = False
+
+
+@dataclass
+class MathAccentNode:
+    accent: str
+    base: MathNode
+
+
+@dataclass
+class MathBoldNode:
+    node: MathNode
 
 
 @dataclass
@@ -317,7 +341,7 @@ class MathMatrixNode:
     rows: list[list["MathNode"]]
 
 
-MathNode = MathTextNode | MathSequenceNode | MathFractionNode | MathScriptNode | MathNaryNode | MathMatrixNode
+MathNode = MathTextNode | MathSequenceNode | MathFractionNode | MathScriptNode | MathNaryNode | MathMatrixNode | MathBoldNode
 
 
 @dataclass
@@ -363,6 +387,13 @@ class BibEntry:
 
 class LatexMathParser:
     GREEK_MAP = {
+        "\\approx": "≈",
+        "\\neq": "≠",
+        "\\leq": "≤",
+        "\\geq": "≥",
+        "\\cdots": "⋯",
+        "\\vdots": "⋮",
+        "\\ddots": "⋱",
         "\\alpha": "α",
         "\\beta": "β",
         "\\gamma": "γ",
@@ -392,13 +423,13 @@ class LatexMathParser:
             if text[i].isspace():
                 i += 1
                 continue
-            if text.startswith("\\begin{matrix}", i):
+            if text.startswith("\\begin{matrix}", i) or text.startswith("\\begin{aligned}", i):
                 tokens.append(MathToken("BEGIN_MATRIX", "matrix"))
-                i += len("\\begin{matrix}")
+                i += text.find("}", i) + 1 - i
                 continue
-            if text.startswith("\\end{matrix}", i):
+            if text.startswith("\\end{matrix}", i) or text.startswith("\\end{aligned}", i):
                 tokens.append(MathToken("END_MATRIX", "matrix"))
-                i += len("\\end{matrix}")
+                i += text.find("}", i) + 1 - i
                 continue
             if text.startswith("\\\\", i):
                 tokens.append(MathToken("NEWROW", "\\\\"))
@@ -502,7 +533,9 @@ class LatexMathParser:
     def _parse_item(self) -> MathNode:
         token = self._current()
         if token.kind == "COMMAND" and token.value == "\\int":
-            return self._parse_integral()
+            return self._parse_nary("∫")
+        if token.kind == "COMMAND" and token.value == "\\sum":
+            return self._parse_nary("∑")
         base = self._parse_base()
         sub: MathNode | None = None
         sup: MathNode | None = None
@@ -536,32 +569,76 @@ class LatexMathParser:
             return self._parse_matrix()
         if token.kind == "COMMAND":
             self._advance()
-            if token.value == "\\frac":
+            cmd = token.value
+            if cmd == "\\label":
+                self._parse_group()
+                return MathTextNode("")
+            if cmd in ("\\boldsymbol", "\\mathbf"):
+                return MathBoldNode(self._parse_group())
+            if cmd == "\\underset":
+                sub = self._parse_group()
+                base = self._parse_group()
+                return MathScriptNode(base, sub, None)
+            if cmd in ("\\mathrm", "\\text", "\\operatorname", "\\mathcal"):
+                return self._parse_group()
+            if cmd == "\\frac":
                 numerator = self._parse_group_or_item()
                 denominator = self._parse_group_or_item()
                 return MathFractionNode(numerator=numerator, denominator=denominator)
-            if token.value in self.GREEK_MAP:
-                return MathTextNode(self.GREEK_MAP[token.value])
-            return MathTextNode(token.value.lstrip("\\"))
+            if cmd == "\\ldots":
+                return MathTextNode("…")
+            if cmd == "\\varphi":
+                return MathTextNode("φ")
+            if cmd == "\\in":
+                return MathTextNode("∈")
+            if cmd == "\\top":
+                return MathTextNode("⊤")
+            if cmd == "\\partial":
+                return MathTextNode("∂")
+            if cmd == "\\nabla":
+                return MathTextNode("∇")
+            if cmd == "\\hat":
+                return MathAccentNode(accent="̂", base=self._parse_group_or_item())
+            if cmd == "\\tilde":
+                return MathAccentNode(accent="̃", base=self._parse_group_or_item())
+            if cmd == "\\bar":
+                return MathAccentNode(accent="̄", base=self._parse_group_or_item())
+            if cmd == "\\vec":
+                return MathAccentNode(accent="⃗", base=self._parse_group_or_item())
+            if cmd == "\\dot":
+                return MathAccentNode(accent="̇", base=self._parse_group_or_item())
+            if cmd == "\\ddot":
+                return MathAccentNode(accent="̈", base=self._parse_group_or_item())
+            if cmd in ("\\log", "\\det", "\\min", "\\max", "\\exp", "\\sin", "\\cos", "\\tan"):
+                return MathTextNode(cmd[1:])
+            if cmd in self.GREEK_MAP:
+                return MathTextNode(self.GREEK_MAP[cmd])
+            if cmd in ("\\Gamma", "\\Delta", "\\Theta", "\\Lambda", "\\Xi", "\\Pi", "\\Sigma", "\\Upsilon", "\\Phi", "\\Psi", "\\Omega"):
+                cap_greek_map = {
+                    "\\Gamma": "Γ", "\\Delta": "Δ", "\\Theta": "Θ", "\\Lambda": "Λ", "\\Xi": "Ξ", "\\Pi": "Π",
+                    "\\Sigma": "Σ", "\\Upsilon": "Υ", "\\Phi": "Φ", "\\Psi": "Ψ", "\\Omega": "Ω"
+                }
+                return MathTextNode(cap_greek_map[cmd])
+            return MathTextNode(cmd.lstrip("\\"))
         if token.kind == "TEXT":
             self._advance()
             return MathTextNode(token.value, literal=token.value in "{}")
         raise ValueError(f"Unsupported LaTeX math token: {token.kind} {token.value!r}")
 
+    def _parse_group(self) -> MathNode:
+        self._expect("LBRACE")
+        node = self._parse_sequence(stop_kinds={"RBRACE"})
+        self._expect("RBRACE")
+        return node
+
     def _parse_group_or_item(self) -> MathNode:
         if self._current().kind == "LBRACE":
-            self._advance()
-            node = self._parse_sequence(stop_kinds={"RBRACE"})
-            self._expect("RBRACE")
-            return node
+            return self._parse_group()
         return self._parse_item()
 
     def _parse_script_argument(self) -> MathNode:
         if self._current().kind == "LBRACE":
-            self._advance()
-            node = self._parse_sequence(stop_kinds={"RBRACE"})
-            self._expect("RBRACE")
-            return node
+            return self._parse_group()
         return self._parse_base()
 
     def _parse_delimiter(self) -> str:
@@ -592,8 +669,8 @@ class LatexMathParser:
             break
         return MathMatrixNode(rows=rows)
 
-    def _parse_integral(self) -> MathNode:
-        self._expect("COMMAND", "\\int")
+    def _parse_nary(self, operator: str) -> MathNode:
+        self._advance()
         sub: MathNode | None = None
         sup: MathNode | None = None
         while self._current().kind in {"SUB", "SUP"}:
@@ -604,7 +681,7 @@ class LatexMathParser:
                 sup = self._parse_script_argument()
                 continue
         body = self._parse_sequence(stop_kinds={"RBRACE", "RIGHT", "ALIGN", "NEWROW", "END_MATRIX"}, stop_text={"+", "-"})
-        return MathNaryNode(operator="∫", body=body, sub=sub, sup=sup)
+        return MathNaryNode(operator=operator, body=body, sub=sub, sup=sup)
 
     def _collapse(self, node_or_items: MathNode | list[MathNode]) -> MathNode:
         if isinstance(node_or_items, list):
@@ -629,6 +706,7 @@ class LatexMathParser:
 class BibParser:
     @staticmethod
     def parse(path: Path) -> list[BibEntry]:
+        if not path.exists(): return []
         text = path.read_text(encoding="utf-8")
         entries: list[BibEntry] = []
         i = 0
@@ -791,7 +869,7 @@ class LatexParser:
                 block, i = self._parse_table(lines, i)
                 blocks.append(block)
                 continue
-            if line.startswith("\\begin{equation"):
+            if line.startswith("\\begin{equation") or line.startswith("\\begin{align") or line.startswith("\\begin{eqnarray"):
                 block, i = self._parse_equation(lines, i)
                 blocks.append(block)
                 continue
@@ -846,11 +924,13 @@ class LatexParser:
                     image_path = path_match.group(1).strip()
                 opt = re.search(r"\[([^\]]+)\]", line)
                 if opt:
-                    width_hint = opt.group(1)
+                    widthhint = opt.group(1)
             elif line.startswith("\\caption"):
                 caption, _ = parse_braced(line, len("\\caption"))
             elif line.startswith("\\end{figure"):
-                return FigureBlock(path=image_path, caption=caption, wide=wide, width_hint=width_hint), i + 1
+                body_text = " ".join(lines[start:i+1])
+                _, label = extract_label(body_text)
+                return FigureBlock(path=image_path, caption=caption, wide=wide, width_hint=widthhint, label=label), i + 1
             i += 1
         raise ValueError("Unclosed figure environment.")
 
@@ -869,7 +949,9 @@ class LatexParser:
             elif line.startswith("\\end{tabular"):
                 in_tabular = False
             elif line.startswith("\\end{table"):
-                return TableBlock(caption=caption, rows=rows), i + 1
+                body_text = " ".join(lines[start:i+1])
+                _, label = extract_label(body_text)
+                return TableBlock(caption=caption, rows=rows, label=label), i + 1
             elif in_tabular:
                 if line in {"\\toprule", "\\midrule", "\\bottomrule"} or not line:
                     i += 1
@@ -904,11 +986,14 @@ class LatexParser:
                 inner = part[len("\\makecell{"):-1]
                 inner = re.sub(r"\\\\", " ", inner)
                 part = inner.strip()
-            match = re.match(r"\\multicolumn\{(\d+)\}\{[^}]*\}\{(.*)\}$", part)
-            if match:
-                span = match.group(1)
-                content = match.group(2)
-                part = f"__MULTICOLUMN:{span}__{content}"
+            if part.startswith("\\multicolumn{"):
+                try:
+                    span_str, pos1 = parse_braced(part, len("\\multicolumn"))
+                    align_str, pos2 = parse_braced(part, pos1)
+                    content_str, pos3 = parse_braced(part, pos2)
+                    part = f"__MULTICOLUMN:{span_str.strip()}__{content_str.strip()}"
+                except ValueError:
+                    pass
             processed_parts.append(part)
         return processed_parts
 
@@ -916,7 +1001,9 @@ class LatexParser:
         body_lines: list[str] = []
         first_line = lines[start].strip()
         if first_line.startswith("$$") and first_line.endswith("$$") and len(first_line) > 2:
-            return EquationBlock(body=first_line[2:-2].strip()), start + 1
+            math_text = first_line[2:-2].strip()
+            math_text, label = extract_label(math_text)
+            return EquationBlock(text=math_text, label=label), start + 1
         if len(first_line) > 2:
             body_lines.append(first_line[2:].strip())
         i = start + 1
@@ -925,7 +1012,9 @@ class LatexParser:
             if line.strip().endswith("$$"):
                 if len(line.strip()) > 2:
                     body_lines.append(line.strip()[:-2].strip())
-                return EquationBlock(body=" ".join(part.strip() for part in body_lines if part.strip())), i + 1
+                math_text = " ".join(part.strip() for part in body_lines if part.strip())
+                math_text, label = extract_label(math_text)
+                return EquationBlock(text=math_text, label=label), i + 1
             body_lines.append(line)
             i += 1
         raise ValueError("Unclosed $$ equation environment.")
@@ -933,10 +1022,15 @@ class LatexParser:
     def _parse_equation(self, lines: list[str], start: int) -> tuple[EquationBlock, int]:
         body_lines: list[str] = []
         i = start + 1
+        is_align = "align" in lines[start] or "eqnarray" in lines[start]
         while i < len(lines):
             line = lines[i].rstrip()
-            if line.strip().startswith("\\end{equation"):
-                return EquationBlock(body=" ".join(part.strip() for part in body_lines if part.strip())), i + 1
+            if line.strip().startswith("\\end{equation}") or line.strip().startswith("\\end{align}") or line.strip().startswith("\\end{align*}") or line.strip().startswith("\\end{eqnarray}") or line.strip().startswith("\\end{eqnarray*}"):
+                math_text = " ".join(part.strip() for part in body_lines if part.strip())
+                math_text, label = extract_label(math_text)
+                if is_align:
+                    math_text = f"\\begin{{aligned}} {math_text} \\end{{aligned}}"
+                return EquationBlock(text=math_text, label=label), i + 1
             body_lines.append(line)
             i += 1
         raise ValueError("Unclosed equation environment.")
@@ -979,15 +1073,27 @@ class InlineLatexConverter:
         "\\;": " ",
     }
 
-    def __init__(self, citation_numbers: dict[str, int], cited_keys: list[str]):
+    def __init__(self, citation_numbers: dict[str, int], cited_keys: list[str], reference_numbers: dict[str, str] | None = None):
         self.citation_numbers = citation_numbers
         self.cited_keys = cited_keys
+        self.reference_numbers = reference_numbers if reference_numbers is not None else {}
 
     def to_runs(self, text: str) -> list[RunSpec]:
         runs: list[RunSpec] = []
         i = 0
         text = normalize_tex_quotes(text.replace("\r", ""))
         while i < len(text):
+            if text[i] == "$":
+                end = text.find("$", i + 1)
+                if end != -1:
+                    math_text = text[i + 1:end].strip()
+                    try:
+                        math_node = LatexMathParser(math_text).parse()
+                        runs.append(RunSpec(text="", math_node=math_node))
+                    except Exception:
+                        self._append_run(runs, text[i:end+1])
+                    i = end + 1
+                    continue
             if text[i] == "%" and (i == 0 or text[i - 1] != "\\"):
                 while i < len(text) and text[i] != "\n":
                     i += 1
@@ -1000,6 +1106,21 @@ class InlineLatexConverter:
                 url, pos = parse_braced(text, i + len("\\href"))
                 label, pos = parse_braced(text, pos)
                 self._append_run(runs, self.to_plain(label), hyperlink=self.to_plain(url))
+                i = pos
+                continue
+            if text.startswith("\\autoref", i) or text.startswith("\\ref", i):
+                cmd_len = len("\\autoref") if text.startswith("\\autoref", i) else len("\\ref")
+                key, pos = parse_braced(text, i + cmd_len)
+                ref_text = self.reference_numbers.get(key, f"ref{{{key}}}")
+                if text.startswith("\\autoref", i) and ref_text.isdigit():
+                    ref_text = f"Eq. {ref_text}"
+                self._append_run(runs, ref_text)
+                i = pos
+                continue
+            if text.startswith("\\eqref", i):
+                key, pos = parse_braced(text, i + len("\\eqref"))
+                ref_text = self.reference_numbers.get(key, f"ref{{{key}}}")
+                self._append_run(runs, f"({ref_text})")
                 i = pos
                 continue
             if text.startswith("\\url", i):
@@ -1054,10 +1175,6 @@ class InlineLatexConverter:
                 self._append_run(runs, "\\" + text[start:j])
                 i = j
                 continue
-            if text.startswith("\\textcopyright", i):
-                self._append_run(runs, "©")
-                i += len("\\textcopyright")
-                continue
             replaced = False
             for escape, replacement in self.SIMPLE_ESCAPES.items():
                 if text.startswith(escape, i):
@@ -1086,7 +1203,7 @@ class InlineLatexConverter:
                 i += 1
                 continue
             start = i
-            while i < len(text) and text[i] not in "\\{}~%\n":
+            while i < len(text) and text[i] not in "\\{}~%\n$":
                 i += 1
             self._append_run(runs, text[start:i])
         return self._normalize_runs(runs)
@@ -1114,6 +1231,9 @@ class InlineLatexConverter:
     def _normalize_runs(self, runs: list[RunSpec]) -> list[RunSpec]:
         normalized: list[RunSpec] = []
         for run in runs:
+            if run.math_node is not None:
+                normalized.append(run)
+                continue
             text = re.sub(r"\s+", " ", run.text)
             if not text:
                 continue
@@ -1435,8 +1555,9 @@ class DocxTemplateConverter:
         self.output_path = output_path
         self.parsed = LatexParser(tex_path).parse()
         self.bib_entries = BibParser.parse(self.parsed.bib_path)
-        self.citation_numbers = {}
-        self.inline = InlineLatexConverter(self.citation_numbers, self.parsed.cited_keys)
+        self.citation_numbers: dict[str, int] = {}
+        self.reference_numbers: dict[str, str] = {}
+        self.inline = InlineLatexConverter(self.citation_numbers, self.parsed.cited_keys, self.reference_numbers)
         self.max_docpr_id = 100
         self.body_section_break: ET.Element | None = None
         self.final_section: ET.Element | None = None
@@ -1446,6 +1567,10 @@ class DocxTemplateConverter:
         self.sample_table_pr: ET.Element | None = None
         self.rel_root: ET.Element | None = None
         self.hyperlinks: dict[str, str] = {}
+
+    def _next_docpr_id(self) -> int:
+        self.max_docpr_id += 1
+        return self.max_docpr_id
 
     def convert(self) -> None:
         with zipfile.ZipFile(self.template_path) as archive:
@@ -1531,6 +1656,22 @@ class DocxTemplateConverter:
         body.append(self._paragraph("PSEKeywords", keyword_runs))
         body.append(self._section_break_paragraph())
 
+        # First pass: map labels to figure/table/equation numbers
+        fig_idx, tab_idx, eq_idx = 0, 0, 0
+        for block in self.parsed.blocks:
+            if isinstance(block, FigureBlock):
+                fig_idx += 1
+                if block.label:
+                    self.reference_numbers[block.label] = f"Fig. {fig_idx}"
+            elif isinstance(block, TableBlock):
+                tab_idx += 1
+                if block.label:
+                    self.reference_numbers[block.label] = f"Table {tab_idx}"
+            elif isinstance(block, EquationBlock):
+                eq_idx += 1
+                if block.label:
+                    self.reference_numbers[block.label] = str(eq_idx)
+
         figure_index = 0
         table_index = 0
         equation_index = 0
@@ -1541,8 +1682,7 @@ class DocxTemplateConverter:
                 style = {1: "PSEHead1", 2: "PSEHead2", 3: "PSEHead3", 4: "PSEHead4"}[block.level]
                 body.append(self._paragraph(style, self.inline.to_runs(block.title)))
             elif isinstance(block, ParagraphBlock):
-                style = "PSEAuthorIdentifiers" if current_section == "author identifiers" else "PSEText"
-                body.append(self._paragraph(style, self.inline.to_runs(block.text.lstrip())))
+                body.append(self._paragraph_from_block(block))
             elif isinstance(block, FigureBlock):
                 figure_index += 1
                 image_path = resolve_image_path(self.tex_path.parent, block.path)
@@ -1559,7 +1699,7 @@ class DocxTemplateConverter:
                 body.append(self._table_element(block.rows))
             elif isinstance(block, EquationBlock):
                 equation_index += 1
-                body.append(self._equation_paragraph(block.body, equation_index))
+                body.append(self._equation_paragraph(block.text, equation_index))
             elif isinstance(block, CodeBlock):
                 for line in block.lines:
                     body.append(self._paragraph("PSECode", [RunSpec(line)] if line else []))
@@ -1668,9 +1808,18 @@ class DocxTemplateConverter:
             pPr = ET.SubElement(paragraph, qn("w", "pPr"))
             pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
             pStyle.set(qn("w", "val"), "PSEEquation")
+            
+        def repl_ref(m):
+            cmd, key = m.group(1), m.group(2)
+            ref_text = self.reference_numbers.get(key, key)
+            if cmd == "eqref": return f"({ref_text})"
+            if cmd == "autoref" and ref_text.isdigit(): return f"Eq. {ref_text}"
+            return ref_text
+        value = re.sub(r"\\(ref|autoref|eqref)\{([^}]+)\}", repl_ref, value)
+
         try:
             equation_root = ET.SubElement(paragraph, qn("m", "oMath"))
-            self._append_math_node(equation_root, LatexMathParser(value).parse())
+            self._build_math_node(equation_root, LatexMathParser(value).parse())
         except Exception:
             paragraph.append(self._run(RunSpec(self.inline.to_plain(value))))
         paragraph.append(self._tab_run())
@@ -1679,14 +1828,25 @@ class DocxTemplateConverter:
         paragraph.append(self._tab_text_run(f"({equation_index})"))
         return paragraph
 
-    def _append_math_node(self, parent: ET.Element, node: MathNode) -> None:
+    def _build_math_node(self, parent: ET.Element, node: MathNode, bold: bool = False) -> None:
         if isinstance(node, MathSequenceNode):
             for item in node.items:
-                self._append_math_node(parent, item)
+                self._build_math_node(parent, item, bold)
+            return
+        if isinstance(node, MathBoldNode):
+            return self._build_math_node(parent, node.node, bold=True)
+        if isinstance(node, MathAccentNode):
+            acc = ET.SubElement(parent, qn("m", "acc"))
+            acc_pr = ET.SubElement(acc, qn("m", "accPr"))
+            chr_elem = ET.SubElement(acc_pr, qn("m", "chr"))
+            chr_elem.set(qn("m", "val"), node.accent)
+            self._append_math_ctrl_pr(acc_pr)
+            base = ET.SubElement(acc, qn("m", "e"))
+            self._build_math_node(base, node.base, bold)
             return
         if isinstance(node, MathTextNode):
             if node.text:
-                parent.append(self._math_run(node.text, literal=node.literal))
+                parent.append(self._math_run(node.text, literal=node.literal, bold=bold))
             return
         if isinstance(node, MathFractionNode):
             frac = ET.SubElement(parent, qn("m", "f"))
@@ -1694,8 +1854,8 @@ class DocxTemplateConverter:
             self._append_math_ctrl_pr(frac_pr)
             num = ET.SubElement(frac, qn("m", "num"))
             den = ET.SubElement(frac, qn("m", "den"))
-            self._append_math_node(num, node.numerator)
-            self._append_math_node(den, node.denominator)
+            self._build_math_node(num, node.numerator)
+            self._build_math_node(den, node.denominator)
             return
         if isinstance(node, MathScriptNode):
             if node.sub is not None and node.sup is not None:
@@ -1705,9 +1865,9 @@ class DocxTemplateConverter:
                 sub = ET.SubElement(script, qn("m", "sub"))
                 sup = ET.SubElement(script, qn("m", "sup"))
                 self._append_math_ctrl_pr(script_pr)
-                self._append_math_node(base, node.base)
-                self._append_math_node(sub, node.sub)
-                self._append_math_node(sup, node.sup)
+                self._build_math_node(base, node.base, bold)
+                self._build_math_node(sub, node.sub)
+                self._build_math_node(sup, node.sup)
                 return
             if node.sub is not None:
                 script = ET.SubElement(parent, qn("m", "sSub"))
@@ -1715,8 +1875,8 @@ class DocxTemplateConverter:
                 base = ET.SubElement(script, qn("m", "e"))
                 sub = ET.SubElement(script, qn("m", "sub"))
                 self._append_math_ctrl_pr(script_pr)
-                self._append_math_node(base, node.base)
-                self._append_math_node(sub, node.sub)
+                self._build_math_node(base, node.base, bold)
+                self._build_math_node(sub, node.sub)
                 return
             if node.sup is not None:
                 script = ET.SubElement(parent, qn("m", "sSup"))
@@ -1724,10 +1884,10 @@ class DocxTemplateConverter:
                 base = ET.SubElement(script, qn("m", "e"))
                 sup = ET.SubElement(script, qn("m", "sup"))
                 self._append_math_ctrl_pr(script_pr)
-                self._append_math_node(base, node.base)
-                self._append_math_node(sup, node.sup)
+                self._build_math_node(base, node.base, bold)
+                self._build_math_node(sup, node.sup)
                 return
-            self._append_math_node(parent, node.base)
+            self._build_math_node(parent, node.base, bold)
             return
         if isinstance(node, MathNaryNode):
             nary = ET.SubElement(parent, qn("m", "nary"))
@@ -1739,12 +1899,12 @@ class DocxTemplateConverter:
             self._append_math_ctrl_pr(nary_pr)
             if node.sub is not None:
                 sub = ET.SubElement(nary, qn("m", "sub"))
-                self._append_math_node(sub, node.sub)
+                self._build_math_node(sub, node.sub)
             if node.sup is not None:
                 sup = ET.SubElement(nary, qn("m", "sup"))
-                self._append_math_node(sup, node.sup)
+                self._build_math_node(sup, node.sup)
             expr = ET.SubElement(nary, qn("m", "e"))
-            self._append_math_node(expr, node.body)
+            self._build_math_node(expr, node.body)
             return
         if isinstance(node, MathMatrixNode):
             matrix = ET.SubElement(parent, qn("m", "m"))
@@ -1762,7 +1922,7 @@ class DocxTemplateConverter:
                 matrix_row = ET.SubElement(matrix, qn("m", "mr"))
                 for cell in row:
                     cell_expr = ET.SubElement(matrix_row, qn("m", "e"))
-                    self._append_math_node(cell_expr, cell)
+                    self._build_math_node(cell_expr, cell)
             return
         raise ValueError(f"Unsupported math node: {type(node)!r}")
 
@@ -1777,15 +1937,18 @@ class DocxTemplateConverter:
         fonts.set(qn("w", "hAnsi"), "Cambria Math")
         return rPr
 
-    def _math_run(self, text: str, *, literal: bool = False) -> ET.Element:
+    def _math_run(self, text: str, *, literal: bool = False, bold: bool = False) -> ET.Element:
         run = ET.Element(qn("m", "r"))
-        if literal or all(ch in "=+-/()[]" for ch in text):
+        if literal or all(ch in "=+-/()[]" for ch in text) or bold:
             math_rpr = ET.SubElement(run, qn("m", "rPr"))
             if literal:
                 ET.SubElement(math_rpr, qn("m", "lit"))
             if all(ch in "=+-/()[]" for ch in text):
                 style = ET.SubElement(math_rpr, qn("m", "sty"))
                 style.set(qn("m", "val"), "p")
+            elif bold:
+                style = ET.SubElement(math_rpr, qn("m", "sty"))
+                style.set(qn("m", "val"), "b")
         run.append(self._math_word_rpr())
         math_text = ET.SubElement(run, qn("m", "t"))
         if text.startswith(" ") or text.endswith(" ") or "  " in text:
@@ -1817,6 +1980,20 @@ class DocxTemplateConverter:
                 hyperlink.append(self._run(run))
             else:
                 p.append(self._run(run))
+        return p
+
+    def _paragraph_from_block(self, block: ParagraphBlock) -> ET.Element:
+        p = ET.Element(qn("w", "p"))
+        pPr = ET.SubElement(p, qn("w", "pPr"))
+        pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
+        pStyle.set(qn("w", "val"), "PSEParagraph")
+        runs = self.inline.to_runs(block.text)
+        for run_spec in runs:
+            if run_spec.math_node is not None:
+                oMath = ET.SubElement(p, qn("m", "oMath"))
+                self._build_math_node(oMath, run_spec.math_node)
+            else:
+                p.append(self._run(run_spec))
         return p
 
     def _run(self, spec: RunSpec) -> ET.Element:
@@ -1862,29 +2039,95 @@ class DocxTemplateConverter:
         return p
 
     def _figure_paragraph(self, rel_id: str, image_path: Path, width_hint: str | None, wide: bool) -> ET.Element:
-        if self.figure_paragraph_template is None:
-            raise ValueError("Figure template paragraph is unavailable.")
-        paragraph = copy.deepcopy(self.figure_paragraph_template)
-        self._refresh_drawing_markup_ids(paragraph)
-        self.max_docpr_id += 1
-        width_emu, height_emu = compute_image_extent(image_path, width_hint, wide)
-        for extent in paragraph.findall(".//wp:extent", NS):
-            extent.set("cx", str(width_emu))
-            extent.set("cy", str(height_emu))
-        for ext in paragraph.findall(".//a:xfrm/a:ext", NS):
-            ext.set("cx", str(width_emu))
-            ext.set("cy", str(height_emu))
-        for blip in paragraph.findall(".//a:blip", NS):
-            blip.set(qn("r", "embed"), rel_id)
-        for docpr in paragraph.findall(".//wp:docPr", NS):
-            docpr.set("id", str(self.max_docpr_id))
-            docpr.set("name", f"Picture {self.max_docpr_id}")
-            docpr.set("descr", image_path.name)
-        for cnvpr in paragraph.findall(".//pic:cNvPr", NS):
-            cnvpr.set("id", str(self.max_docpr_id))
-            cnvpr.set("name", image_path.name)
-            cnvpr.set("descr", image_path.name)
-        return paragraph
+        p = copy.deepcopy(self.figure_paragraph_template)
+        for child in list(p):
+            p.remove(child)
+        run = ET.SubElement(p, qn("w", "r"))
+        drawing = ET.SubElement(run, qn("w", "drawing"))
+        width, height = compute_image_extent(image_path, width_hint, wide)
+        
+        if wide:
+            container = ET.SubElement(drawing, qn("wp", "anchor"))
+            container.set("distT", "0")
+            container.set("distB", "0")
+            container.set("distL", "0")
+            container.set("distR", "0")
+            container.set("simplePos", "0")
+            container.set("relativeHeight", "251658240")
+            container.set("behindDoc", "0")
+            container.set("locked", "0")
+            container.set("layoutInCell", "1")
+            container.set("allowOverlap", "1")
+            simplePos = ET.SubElement(container, qn("wp", "simplePos"))
+            simplePos.set("x", "0")
+            simplePos.set("y", "0")
+            positionH = ET.SubElement(container, qn("wp", "positionH"))
+            positionH.set("relativeFrom", "margin")
+            posOffsetH = ET.SubElement(positionH, qn("wp", "posOffset"))
+            posOffsetH.text = "0"
+            positionV = ET.SubElement(container, qn("wp", "positionV"))
+            positionV.set("relativeFrom", "paragraph")
+            posOffsetV = ET.SubElement(positionV, qn("wp", "posOffset"))
+            posOffsetV.text = "0"
+            extent = ET.SubElement(container, qn("wp", "extent"))
+            extent.set("cx", str(width))
+            extent.set("cy", str(height))
+            effectExtent = ET.SubElement(container, qn("wp", "effectExtent"))
+            effectExtent.set("l", "0")
+            effectExtent.set("t", "0")
+            effectExtent.set("r", "0")
+            effectExtent.set("b", "0")
+            wrapTopAndBottom = ET.SubElement(container, qn("wp", "wrapTopAndBottom"))
+        else:
+            container = ET.SubElement(drawing, qn("wp", "inline"))
+            container.set("distT", "0")
+            container.set("distB", "0")
+            container.set("distL", "0")
+            container.set("distR", "0")
+            extent = ET.SubElement(container, qn("wp", "extent"))
+            extent.set("cx", str(width))
+            extent.set("cy", str(height))
+            effectExtent = ET.SubElement(container, qn("wp", "effectExtent"))
+            effectExtent.set("l", "0")
+            effectExtent.set("t", "0")
+            effectExtent.set("r", "0")
+            effectExtent.set("b", "0")
+            
+        docPr = ET.SubElement(container, qn("wp", "docPr"))
+        docPr.set("id", str(self._next_docpr_id()))
+        docPr.set("name", f"Picture {self.max_docpr_id}")
+        cNvGraphicFramePr = ET.SubElement(container, qn("wp", "cNvGraphicFramePr"))
+        graphicFrameLocks = ET.SubElement(cNvGraphicFramePr, qn("a", "graphicFrameLocks"))
+        graphicFrameLocks.set("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main")
+        graphicFrameLocks.set("noChangeAspect", "1")
+        graphic = ET.SubElement(container, qn("a", "graphic"))
+        graphic.set("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main")
+        graphicData = ET.SubElement(graphic, qn("a", "graphicData"))
+        graphicData.set("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")
+        pic = ET.SubElement(graphicData, qn("pic", "pic"))
+        pic.set("xmlns:pic", "http://schemas.openxmlformats.org/drawingml/2006/picture")
+        nvPicPr = ET.SubElement(pic, qn("pic", "nvPicPr"))
+        cNvPr = ET.SubElement(nvPicPr, qn("pic", "cNvPr"))
+        cNvPr.set("id", str(self._next_docpr_id()))
+        cNvPr.set("name", f"Picture {self.max_docpr_id}")
+        cNvPicPr = ET.SubElement(nvPicPr, qn("pic", "cNvPicPr"))
+        blipFill = ET.SubElement(pic, qn("pic", "blipFill"))
+        blip = ET.SubElement(blipFill, qn("a", "blip"))
+        blip.set(qn("r", "embed"), rel_id)
+        stretch = ET.SubElement(blipFill, qn("a", "stretch"))
+        fillRect = ET.SubElement(stretch, qn("a", "fillRect"))
+        spPr = ET.SubElement(pic, qn("pic", "spPr"))
+        xfrm = ET.SubElement(spPr, qn("a", "xfrm"))
+        off = ET.SubElement(xfrm, qn("a", "off"))
+        off.set("x", "0")
+        off.set("y", "0")
+        ext = ET.SubElement(xfrm, qn("a", "ext"))
+        ext.set("cx", str(width))
+        ext.set("cy", str(height))
+        prstGeom = ET.SubElement(spPr, qn("a", "prstGeom"))
+        prstGeom.set("prst", "rect")
+        avLst = ET.SubElement(prstGeom, qn("a", "avLst"))
+        return p
 
     def _copyright_logo_paragraph(self) -> ET.Element:
         if self.cc_logo_paragraph_template is None:
@@ -1968,7 +2211,11 @@ class DocxTemplateConverter:
                     current = copy.deepcopy(run)
                     if row_index == 0:
                         current.bold = True
-                    p.append(self._run(current))
+                    if current.math_node is not None:
+                        oMath = ET.SubElement(p, qn("m", "oMath"))
+                        self._build_math_node(oMath, current.math_node)
+                    else:
+                        p.append(self._run(current))
                 col_index += span
         return tbl
 
