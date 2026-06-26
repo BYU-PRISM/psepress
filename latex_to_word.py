@@ -727,9 +727,22 @@ class LatexParser:
         self.tex_path = tex_path
         self.text = load_latex_source(tex_path)
         self.metadata = {key: extract_command_body(self.text, key) or "" for key in self.METADATA_KEYS}
-        self.document_body = self._extract_document_body()
+        self.document_body = self._resolve_macros(self._extract_document_body())
         self.bib_path = self._extract_bib_path()
         self.nocite_all = "\\nocite{*}" in self.document_body
+
+    def _resolve_macros(self, text: str) -> str:
+        macros = {}
+        for match in re.finditer(r"\\(?:re)?newcommand\{\\([a-zA-Z]+)\}", self.text):
+            macro_name = match.group(1)
+            if macro_name not in self.METADATA_KEYS:
+                body = extract_command_body(self.text, macro_name)
+                if body is not None:
+                    macros[macro_name] = body
+        for name, body in macros.items():
+            text = re.sub(r"\\" + name + r"\{\}", body, text)
+            text = re.sub(r"\\" + name + r"\b", body, text)
+        return text
 
     def _extract_document_body(self) -> str:
         start = self.text.find("\\begin{document}")
@@ -780,6 +793,10 @@ class LatexParser:
                 continue
             if line.startswith("\\begin{equation"):
                 block, i = self._parse_equation(lines, i)
+                blocks.append(block)
+                continue
+            if line.startswith("$$"):
+                block, i = self._parse_display_math(lines, i)
                 blocks.append(block)
                 continue
             if line.startswith("\\begin{lstlisting"):
@@ -880,7 +897,38 @@ class LatexParser:
                 continue
             current.append(ch)
         parts.append("".join(current))
-        return parts
+        processed_parts: list[str] = []
+        for part in parts:
+            part = part.strip()
+            if part.startswith("\\makecell{") and part.endswith("}"):
+                inner = part[len("\\makecell{"):-1]
+                inner = re.sub(r"\\\\", " ", inner)
+                part = inner.strip()
+            match = re.match(r"\\multicolumn\{(\d+)\}\{[^}]*\}\{(.*)\}$", part)
+            if match:
+                span = match.group(1)
+                content = match.group(2)
+                part = f"__MULTICOLUMN:{span}__{content}"
+            processed_parts.append(part)
+        return processed_parts
+
+    def _parse_display_math(self, lines: list[str], start: int) -> tuple[EquationBlock, int]:
+        body_lines: list[str] = []
+        first_line = lines[start].strip()
+        if first_line.startswith("$$") and first_line.endswith("$$") and len(first_line) > 2:
+            return EquationBlock(body=first_line[2:-2].strip()), start + 1
+        if len(first_line) > 2:
+            body_lines.append(first_line[2:].strip())
+        i = start + 1
+        while i < len(lines):
+            line = lines[i].rstrip()
+            if line.strip().endswith("$$"):
+                if len(line.strip()) > 2:
+                    body_lines.append(line.strip()[:-2].strip())
+                return EquationBlock(body=" ".join(part.strip() for part in body_lines if part.strip())), i + 1
+            body_lines.append(line)
+            i += 1
+        raise ValueError("Unclosed $$ equation environment.")
 
     def _parse_equation(self, lines: list[str], start: int) -> tuple[EquationBlock, int]:
         body_lines: list[str] = []
@@ -974,10 +1022,11 @@ class InlineLatexConverter:
                 keys, pos = parse_braced(text, i + len("\\cite"))
                 numbers: list[int] = []
                 for key in [item.strip() for item in keys.split(",") if item.strip()]:
-                    if key in self.citation_numbers:
-                        numbers.append(self.citation_numbers[key])
                     if key not in self.cited_keys:
                         self.cited_keys.append(key)
+                    if key not in self.citation_numbers:
+                        self.citation_numbers[key] = len(self.citation_numbers) + 1
+                    numbers.append(self.citation_numbers[key])
                 numbers = sorted(dict.fromkeys(numbers))
                 self._append_run(runs, "[" + ",".join(str(number) for number in numbers) + "]")
                 i = pos
@@ -1140,12 +1189,28 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
     if candidate.suffix:
         for path in search_paths:
             if path.exists():
+                if path.suffix.lower() == ".eps":
+                    png_path = path.with_suffix(".png")
+                    if not png_path.exists():
+                        from PIL import Image
+                        with Image.open(path) as img:
+                            img.load(scale=5)
+                            img.save(png_path, "PNG", dpi=(300, 300))
+                    return png_path.resolve()
                 return path.resolve()
     else:
         for base in search_paths:
-            for ext in (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff"):
+            for ext in (".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".eps"):
                 path = base.with_suffix(ext)
                 if path.exists():
+                    if ext == ".eps":
+                        png_path = path.with_suffix(".png")
+                        if not png_path.exists():
+                            from PIL import Image
+                            with Image.open(path) as img:
+                                img.load(scale=5)
+                                img.save(png_path, "PNG", dpi=(300, 300))
+                        return png_path.resolve()
                     return path.resolve()
     raise FileNotFoundError(f"Could not resolve image referenced from LaTeX: {image_ref}")
 
@@ -1308,7 +1373,7 @@ def parse_width_hint_cm(width_hint: str | None, wide: bool) -> float:
     if "\\columnwidth" in width_hint:
         return MAX_COLUMN_IMAGE_WIDTH_CM
     if "\\textwidth" in width_hint:
-        return MAX_WIDE_IMAGE_WIDTH_CM if wide else 17.5
+        return MAX_WIDE_IMAGE_WIDTH_CM if wide else MAX_COLUMN_IMAGE_WIDTH_CM
     return max_cm
 
 
@@ -1325,7 +1390,10 @@ def compute_image_extent(path: Path, width_hint: str | None, wide: bool) -> tupl
     width_px, height_px = image_size(path)
     native_width_cm = native_image_width_cm(path)
     requested_width_cm = parse_width_hint_cm(width_hint, wide)
-    width_cm = max(MIN_IMAGE_WIDTH_CM, min(requested_width_cm, max(native_width_cm, MIN_IMAGE_WIDTH_CM)))
+    if width_hint:
+        width_cm = requested_width_cm
+    else:
+        width_cm = max(MIN_IMAGE_WIDTH_CM, min(requested_width_cm, max(native_width_cm, MIN_IMAGE_WIDTH_CM)))
     width_emu = int(width_cm * EMU_PER_CM)
     height_emu = max(1, int(width_emu * height_px / max(1, width_px)))
     return width_emu, height_emu
@@ -1367,7 +1435,7 @@ class DocxTemplateConverter:
         self.output_path = output_path
         self.parsed = LatexParser(tex_path).parse()
         self.bib_entries = BibParser.parse(self.parsed.bib_path)
-        self.citation_numbers = {entry.key: idx + 1 for idx, entry in enumerate(self.bib_entries)}
+        self.citation_numbers = {}
         self.inline = InlineLatexConverter(self.citation_numbers, self.parsed.cited_keys)
         self.max_docpr_id = 100
         self.body_section_break: ET.Element | None = None
@@ -1510,9 +1578,15 @@ class DocxTemplateConverter:
 
     def _selected_bib_entries(self) -> list[BibEntry]:
         if self.parsed.nocite_all or not self.parsed.cited_keys:
-            return self.bib_entries
-        cited = set(self.parsed.cited_keys)
-        return [entry for entry in self.bib_entries if entry.key in cited]
+            for entry in self.bib_entries:
+                if entry.key not in self.citation_numbers:
+                    self.citation_numbers[entry.key] = len(self.citation_numbers) + 1
+        entries_by_key = {entry.key: entry for entry in self.bib_entries}
+        result = []
+        for key in sorted(self.citation_numbers.keys(), key=lambda k: self.citation_numbers[k]):
+            if key in entries_by_key:
+                result.append(entries_by_key[key])
+        return result
 
     def _affiliation_runs(self, line: str) -> list[RunSpec]:
         return self.inline.to_runs(self._sanitize_corresponding_author_line(line.lstrip()))
@@ -1860,17 +1934,29 @@ class DocxTemplateConverter:
                 }.items():
                     cnf.set(qn("w", key), value)
             padded = row + [""] * (column_count - len(row))
-            for col_index, cell_text in enumerate(padded):
+            col_index = 0
+            while col_index < column_count:
+                cell_text = padded[col_index]
+                span = 1
+                if cell_text.startswith("__MULTICOLUMN:"):
+                    end_marker = cell_text.find("__", 14)
+                    if end_marker != -1:
+                        span = int(cell_text[14:end_marker])
+                        cell_text = cell_text[end_marker+2:]
                 tc = ET.SubElement(tr, qn("w", "tc"))
                 tcPr = ET.SubElement(tc, qn("w", "tcPr"))
                 tcW = ET.SubElement(tcPr, qn("w", "tcW"))
-                tcW.set(qn("w", "w"), str(widths[col_index]))
+                span_width = sum(widths[col_index : min(col_index + span, column_count)])
+                tcW.set(qn("w", "w"), str(span_width))
                 tcW.set(qn("w", "type"), "dxa")
+                if span > 1:
+                    gridSpan = ET.SubElement(tcPr, qn("w", "gridSpan"))
+                    gridSpan.set(qn("w", "val"), str(span))
                 p = ET.SubElement(tc, qn("w", "p"))
                 pPr = ET.SubElement(p, qn("w", "pPr"))
                 pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
                 pStyle.set(qn("w", "val"), "PSETableContent")
-                if col_index == column_count - 1 and looks_numeric(cell_text):
+                if col_index + span - 1 == column_count - 1 and looks_numeric(cell_text):
                     jc = ET.SubElement(pPr, qn("w", "jc"))
                     jc.set(qn("w", "val"), "right")
                 if row_index == 0:
@@ -1883,6 +1969,7 @@ class DocxTemplateConverter:
                     if row_index == 0:
                         current.bold = True
                     p.append(self._run(current))
+                col_index += span
         return tbl
 
     def _update_headers_and_footers(self, package_entries: dict[str, bytes]) -> None:
