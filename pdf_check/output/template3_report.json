@@ -1,0 +1,112 @@
+{
+  "source_pdf": "C:\\Users\\johnh\\Desktop\\psepress\\pdf_check\\input\\template3.pdf",
+  "annotated_pdf": "C:\\Users\\johnh\\Desktop\\psepress\\pdf_check\\output\\template3_checked.pdf",
+  "generated_utc": "2026-06-30T23:18:08.268073+00:00",
+  "summary": {
+    "page_count": 3,
+    "margin_status": "FAIL",
+    "margin_fail_pages": [
+      1,
+      2,
+      3
+    ],
+    "large_whitespace_region_count": 0,
+    "whitespace_status": "PASS"
+  },
+  "settings": {
+    "final_page_excluded": true,
+    "columns": 2,
+    "gutter_points": 18.0,
+    "minimum_whitespace_height_points": 108.0,
+    "minimum_whitespace_height_inches": 1.5,
+    "yellow_opacity": 0.7,
+    "margin_tolerance_points": 6.0,
+    "dpi": 144
+  },
+  "pages": [
+    {
+      "page": 1,
+      "page_size_points": {
+        "width": 612.0,
+        "height": 792.0
+      },
+      "page_size_status": "PASS",
+      "expected_margins_points": {
+        "top": 113.4,
+        "right": 56.7,
+        "bottom": 42.55,
+        "left": 56.7
+      },
+      "margin_check": {
+        "status": "FAIL",
+        "observed_bounds_points": {
+          "left": 36.0,
+          "right": 578.62,
+          "top": 57.6,
+          "bottom": 726.83
+        },
+        "left_overflow_points": 20.7,
+        "right_overflow_points": 23.32,
+        "objects_outside_horizontal_margins": 93
+      },
+      "whitespace_analyzed": true,
+      "whitespace_regions": []
+    },
+    {
+      "page": 2,
+      "page_size_points": {
+        "width": 612.0,
+        "height": 792.0
+      },
+      "page_size_status": "PASS",
+      "expected_margins_points": {
+        "top": 42.55,
+        "right": 56.7,
+        "bottom": 56.7,
+        "left": 56.7
+      },
+      "margin_check": {
+        "status": "FAIL",
+        "observed_bounds_points": {
+          "left": 36.0,
+          "right": 578.63,
+          "top": 37.56,
+          "bottom": 726.83
+        },
+        "left_overflow_points": 20.7,
+        "right_overflow_points": 23.33,
+        "objects_outside_horizontal_margins": 264
+      },
+      "whitespace_analyzed": true,
+      "whitespace_regions": []
+    },
+    {
+      "page": 3,
+      "page_size_points": {
+        "width": 612.0,
+        "height": 792.0
+      },
+      "page_size_status": "PASS",
+      "expected_margins_points": {
+        "top": 42.55,
+        "right": 56.7,
+        "bottom": 56.7,
+        "left": 56.7
+      },
+      "margin_check": {
+        "status": "FAIL",
+        "observed_bounds_points": {
+          "left": 36.0,
+          "right": 578.43,
+          "top": 37.56,
+          "bottom": 726.83
+        },
+        "left_overflow_points": 20.7,
+        "right_overflow_points": 23.13,
+        "objects_outside_horizontal_margins": 157
+      },
+      "whitespace_analyzed": false,
+      "whitespace_regions": []
+    }
+  ]
+}

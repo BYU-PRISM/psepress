@@ -1,0 +1,4 @@
+﻿source_pdf,annotated_pdf,page_count,margin_status,margin_fail_pages,whitespace_status,large_whitespace_region_count
+C:\Users\johnh\Desktop\psepress\pdf_check\input\template1.pdf,C:\Users\johnh\Desktop\psepress\pdf_check\output\template1_checked.pdf,3,PASS,,PASS,0
+C:\Users\johnh\Desktop\psepress\pdf_check\input\template2.pdf,C:\Users\johnh\Desktop\psepress\pdf_check\output\template2_checked.pdf,4,PASS,,REVIEW,4
+C:\Users\johnh\Desktop\psepress\pdf_check\input\template3.pdf,C:\Users\johnh\Desktop\psepress\pdf_check\output\template3_checked.pdf,3,FAIL,"1,2,3",PASS,0
