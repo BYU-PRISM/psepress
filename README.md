@@ -10,6 +10,8 @@ The app is also available online through Streamlit Community Cloud:
 
 Anyone can use the hosted app to upload a zipped LaTeX archive and convert it into a Word document without running the project locally.
 
+![LaTeX to Word App](latex_to_word.png)
+
 ## Files
 
 - `app.py`: Streamlit UI
