@@ -31,9 +31,8 @@ scanned figures all count as page content.
 
 From this directory:
 
-```powershell
-$python = "C:\Users\johnh\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
-& $python .\pdf_publication_check.py
+```bash
+python3 pdf_publication_check.py
 ```
 
 The default locations are:
@@ -48,9 +47,8 @@ Existing source PDFs in `input` are never modified.
 
 To override the standard folders when needed:
 
-```powershell
-& $python .\pdf_publication_check.py "C:\path\to\incoming" `
-  --output-dir "C:\path\to\reviewed"
+```bash
+python3 pdf_publication_check.py \path\to\incoming --output-dir \path\to\reviewed
 ```
 
 Useful adjustments:
@@ -69,5 +67,4 @@ Useful adjustments:
 
 Python packages: `Pillow`, `pdfplumber`, `pypdf`, and `reportlab`.
 Poppler's `pdftoppm` executable must also be installed or supplied with
-`--pdftoppm`. The included command uses the bundled Codex runtime, which
-already provides these dependencies.
+`--pdftoppm`.
