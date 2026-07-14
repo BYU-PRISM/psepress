@@ -254,16 +254,76 @@ def extract_label(text: str) -> tuple[str, str | None]:
     return text, None
 
 
+def strip_math_labels(text: str) -> str:
+    return re.sub(r"\\label\s*\{[^}]*\}", "", text)
+
+
+def strip_math_delimiters(text: str) -> str:
+    value = text.strip()
+    if value.startswith("$$") and value.endswith("$$") and len(value) >= 4:
+        return value[2:-2].strip()
+    if value.startswith("$") and value.endswith("$") and len(value) >= 2:
+        return value[1:-1].strip()
+    if value.startswith(r"\(") and value.endswith(r"\)"):
+        return value[2:-2].strip()
+    if value.startswith(r"\[") and value.endswith(r"\]"):
+        return value[2:-2].strip()
+    return value
+
+
+def sanitize_math_text(text: str) -> str:
+    return strip_math_delimiters(strip_math_labels(text))
+
+
+LATEX_ACCENT_REPLACEMENTS = {
+    r"\'a": "á",
+    r"\'e": "é",
+    r"\'i": "í",
+    r"\'o": "ó",
+    r"\'u": "ú",
+    r"\'A": "Á",
+    r"\'E": "É",
+    r"\'I": "Í",
+    r"\'O": "Ó",
+    r"\'U": "Ú",
+    r'\\"a': "ä",
+    r'\\"e': "ë",
+    r'\\"i': "ï",
+    r'\\"o': "ö",
+    r'\\"u': "ü",
+    r'\\"A': "Ä",
+    r'\\"E': "Ë",
+    r'\\"I': "Ï",
+    r'\\"O': "Ö",
+    r'\\"U': "Ü",
+    r"\~n": "ñ",
+    r"\~N": "Ñ",
+    r"\^i": "î",
+    r"\^I": "Î",
+}
+
+
+def decode_latex_text(value: str) -> str:
+    value = value.replace("\n", " ")
+    for latex, replacement in LATEX_ACCENT_REPLACEMENTS.items():
+        value = value.replace(latex, replacement)
+        value = value.replace("{" + latex + "}", replacement)
+    value = re.sub(r"\\['\"~^`=.uvHtcdbkro]\{?([A-Za-z])\}?", r"\1", value)
+    value = value.replace("\\&", "&")
+    value = value.replace("\\_", "_")
+    value = value.replace("\\%", "%")
+    value = value.replace("\\#", "#")
+    value = value.replace("\\$", "$")
+    value = re.sub(r"[{}]", "", value)
+    return normalize_space(normalize_tex_dashes(value))
+
+
 def clean_bib_value(value: str) -> str:
     value = value.strip()
     if value.startswith("{") and value.endswith("}"):
         value = value[1:-1]
-    value = value.replace("\n", " ")
     value = value.replace("~", " ")
-    value = value.replace("\\&", "&")
-    value = value.replace("\\_", "_")
-    value = re.sub(r"[{}]", "", value)
-    return normalize_space(normalize_tex_dashes(value))
+    return decode_latex_text(value)
 
 
 def load_latex_source(tex_path: Path, seen: set[Path] | None = None) -> str:
@@ -375,6 +435,7 @@ class MathNaryNode:
     body: "MathNode"
     sub: "MathNode | None" = None
     sup: "MathNode | None" = None
+    lim_loc: str = "subSup"
 
 
 @dataclass
@@ -426,6 +487,119 @@ class BibEntry:
     fields: dict[str, str]
 
 
+def strip_outer_braces(value: str) -> str:
+    value = value.strip()
+    while value.startswith("{") and value.endswith("}"):
+        depth = 0
+        balanced_outer = True
+        for index, ch in enumerate(value):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and index != len(value) - 1:
+                    balanced_outer = False
+                    break
+        if not balanced_outer:
+            break
+        value = value[1:-1].strip()
+    return value
+
+
+def split_bibtex_top_level(value: str, separator: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if depth == 0 and value.startswith(separator, i):
+            parts.append("".join(current).strip())
+            current = []
+            i += len(separator)
+            continue
+        current.append(ch)
+        i += 1
+    parts.append("".join(current).strip())
+    return [part for part in parts if part]
+
+
+def split_bibtex_names(value: str) -> list[str]:
+    return split_bibtex_top_level(value, " and ")
+
+
+def split_bibtex_name_parts(value: str) -> list[str]:
+    return split_bibtex_top_level(value, ",")
+
+
+def looks_like_protected_corporate_name(value: str) -> bool:
+    stripped = value.strip()
+    return stripped.startswith("{") and stripped.endswith("}") and len(split_bibtex_name_parts(stripped)) == 1
+
+
+def initials_from_given_names(value: str) -> str:
+    value = decode_latex_text(strip_outer_braces(value))
+    letters: list[str] = []
+    for token in re.split(r"[\s\-]+", value):
+        token = token.strip(". ")
+        if not token:
+            continue
+        if len(token) > 1 and token.isupper():
+            letters.extend(token)
+        else:
+            match = re.search(r"[A-Za-z]", token)
+            if match:
+                letters.append(match.group(0).upper())
+    return " ".join(f"{letter}." for letter in letters)
+
+
+def looks_like_name_suffix(value: str) -> bool:
+    normalized = decode_latex_text(strip_outer_braces(value)).strip(". ").lower()
+    return normalized in {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def format_bibtex_name(value: str) -> str:
+    value = value.strip()
+    if looks_like_protected_corporate_name(value):
+        return decode_latex_text(strip_outer_braces(value))
+
+    parts = split_bibtex_name_parts(value)
+    suffix = ""
+    if len(parts) >= 3:
+        family = parts[0]
+        if looks_like_name_suffix(parts[-1]):
+            given = " ".join(parts[1:-1])
+            suffix = parts[-1]
+        else:
+            suffix = parts[1]
+            given = " ".join(parts[2:])
+    elif len(parts) == 2:
+        family, given = parts
+    else:
+        tokens = decode_latex_text(value).split()
+        if len(tokens) <= 1:
+            return decode_latex_text(value)
+        family = tokens[-1]
+        given = " ".join(tokens[:-1])
+
+    family_text = decode_latex_text(strip_outer_braces(family))
+    given_initials = initials_from_given_names(given)
+    name = f"{given_initials} {family_text}".strip() if given_initials else family_text
+    suffix_text = decode_latex_text(strip_outer_braces(suffix))
+    if suffix_text:
+        name = f"{name}, {suffix_text}"
+    return name
+
+
+def format_bibtex_names(value: str) -> str:
+    names = [format_bibtex_name(name) for name in split_bibtex_names(value) if name.strip()]
+    return ", ".join(name for name in names if name)
+
+
 class LatexMathParser:
     GREEK_MAP = {
         "\\approx": "≈",
@@ -447,7 +621,53 @@ class LatexMathParser:
         "\\omega": "ω",
         "\\infty": "∞",
     }
-    SPACING_COMMANDS = {"\\,", "\\;", "\\!", "\\quad", "\\qquad"}
+    SYMBOL_COMMANDS = {
+        "\\forall": "\u2200",
+        "\\exists": "\u2203",
+        "\\in": "\u2208",
+        "\\notin": "\u2209",
+        "\\setminus": "\u2216",
+        "\\emptyset": "\u2205",
+        "\\varnothing": "\u2205",
+        "\\cup": "\u222a",
+        "\\cap": "\u2229",
+        "\\subset": "\u2282",
+        "\\subseteq": "\u2286",
+        "\\supset": "\u2283",
+        "\\supseteq": "\u2287",
+        "\\le": "\u2264",
+        "\\leq": "\u2264",
+        "\\ge": "\u2265",
+        "\\geq": "\u2265",
+        "\\neq": "\u2260",
+        "\\ne": "\u2260",
+        "\\approx": "\u2248",
+        "\\sim": "\u223c",
+        "\\times": "\u00d7",
+        "\\cdot": "\u22c5",
+        "\\pm": "\u00b1",
+        "\\mp": "\u2213",
+        "\\to": "\u2192",
+        "\\rightarrow": "\u2192",
+        "\\leftarrow": "\u2190",
+        "\\Rightarrow": "\u21d2",
+        "\\partial": "\u2202",
+        "\\nabla": "\u2207",
+        "\\top": "\u22a4",
+        "\\ldots": "\u2026",
+        "\\cdots": "\u22ef",
+        "\\lambda": "\u03bb",
+        "\\phi": "\u03c6",
+        "\\varphi": "\u03c6",
+        "\\rho": "\u03c1",
+        "\\eta": "\u03b7",
+        "\\tau": "\u03c4",
+        "\\kappa": "\u03ba",
+        "\\psi": "\u03c8",
+        "\\Psi": "\u03a8",
+    }
+    SPACING_COMMANDS = {"\\,", "\\;", "\\!", "\\:", "\\enspace", "\\quad", "\\qquad", "\\thinspace", "\\medspace"}
+    NOOP_COMMANDS = {"\\limits", "\\nolimits", "\\displaylimits", "\\notag", "\\nonumber"}
 
     def __init__(self, text: str):
         self.tokens = self._tokenize(text)
@@ -574,9 +794,9 @@ class LatexMathParser:
     def _parse_item(self) -> MathNode:
         token = self._current()
         if token.kind == "COMMAND" and token.value == "\\int":
-            return self._parse_nary("∫")
+            return self._parse_nary("\u222b", "subSup")
         if token.kind == "COMMAND" and token.value == "\\sum":
-            return self._parse_nary("∑")
+            return self._parse_nary("\u2211", "undOvr")
         base = self._parse_base()
         sub: MathNode | None = None
         sup: MathNode | None = None
@@ -611,21 +831,29 @@ class LatexMathParser:
         if token.kind == "COMMAND":
             self._advance()
             cmd = token.value
+            if cmd in self.NOOP_COMMANDS:
+                return MathTextNode("")
             if cmd == "\\label":
                 self._parse_group()
                 return MathTextNode("")
             if cmd in ("\\boldsymbol", "\\mathbf"):
                 return MathBoldNode(self._parse_group())
+            if cmd in ("\\mathclap", "\\smash", "\\vphantom", "\\hphantom", "\\phantom"):
+                return self._parse_group()
+            if cmd == "\\substack":
+                return self._parse_substack()
             if cmd == "\\underset":
                 sub = self._parse_group()
                 base = self._parse_group()
                 return MathScriptNode(base, sub, None)
-            if cmd in ("\\mathrm", "\\text", "\\operatorname", "\\mathcal"):
+            if cmd in ("\\mathrm", "\\text", "\\operatorname", "\\mathcal", "\\mathbb", "\\mathsf", "\\mathtt"):
                 return self._parse_group()
             if cmd == "\\frac":
                 numerator = self._parse_group_or_item()
                 denominator = self._parse_group_or_item()
                 return MathFractionNode(numerator=numerator, denominator=denominator)
+            if cmd in self.SYMBOL_COMMANDS:
+                return MathTextNode(self.SYMBOL_COMMANDS[cmd])
             if cmd == "\\ldots":
                 return MathTextNode("…")
             if cmd == "\\varphi":
@@ -672,6 +900,21 @@ class LatexMathParser:
         self._expect("RBRACE")
         return node
 
+    def _parse_substack(self) -> MathNode:
+        self._expect("LBRACE")
+        rows: list[list[MathNode]] = []
+        while self._current().kind not in {"RBRACE", "EOF"}:
+            cell = self._parse_sequence(stop_kinds={"NEWROW", "RBRACE"})
+            rows.append([cell])
+            if self._match("NEWROW"):
+                continue
+        self._expect("RBRACE")
+        if not rows:
+            return MathTextNode("")
+        if len(rows) == 1:
+            return rows[0][0]
+        return MathMatrixNode(rows=rows)
+
     def _parse_group_or_item(self) -> MathNode:
         if self._current().kind == "LBRACE":
             return self._parse_group()
@@ -686,6 +929,8 @@ class LatexMathParser:
         token = self._current()
         if token.kind == "TEXT":
             self._advance()
+            if token.value == ".":
+                return ""
             return token.value
         if token.kind == "COMMAND" and token.value in self.GREEK_MAP:
             self._advance()
@@ -710,8 +955,10 @@ class LatexMathParser:
             break
         return MathMatrixNode(rows=rows)
 
-    def _parse_nary(self, operator: str) -> MathNode:
+    def _parse_nary(self, operator: str, lim_loc: str = "subSup") -> MathNode:
         self._advance()
+        while self._current().kind == "COMMAND" and self._current().value in self.NOOP_COMMANDS:
+            self._advance()
         sub: MathNode | None = None
         sup: MathNode | None = None
         while self._current().kind in {"SUB", "SUP"}:
@@ -722,7 +969,7 @@ class LatexMathParser:
                 sup = self._parse_script_argument()
                 continue
         body = self._parse_sequence(stop_kinds={"RBRACE", "RIGHT", "ALIGN", "NEWROW", "END_MATRIX"}, stop_text={"+", "-"})
-        return MathNaryNode(operator=operator, body=body, sub=sub, sup=sup)
+        return MathNaryNode(operator=operator, body=body, sub=sub, sup=sup, lim_loc=lim_loc)
 
     def _collapse(self, node_or_items: MathNode | list[MathNode]) -> MathNode:
         if isinstance(node_or_items, list):
@@ -920,6 +1167,10 @@ class LatexParser:
                 block, i = self._parse_display_math(lines, i)
                 blocks.append(block)
                 continue
+            if line.startswith("\\["):
+                block, i = self._parse_bracket_display_math(lines, i)
+                blocks.append(block)
+                continue
             if line.startswith("\\begin{lstlisting"):
                 block, i = self._parse_code(lines, i)
                 blocks.append(block)
@@ -936,7 +1187,7 @@ class LatexParser:
                     break
                 if current.startswith("\\section{") or current.startswith("\\subsection{") or current.startswith("\\subsubsection{") or current.startswith("\\paragraph{"):
                     break
-                if current.startswith("\\begin{") or current in {"\\pseprintreferences", "\\pseprintcopyright", "\\psemaketitle", "\\balance"} or current.startswith("\\nocite"):
+                if current.startswith("\\begin{") or current.startswith("\\[") or current in {"\\pseprintreferences", "\\pseprintcopyright", "\\psemaketitle", "\\balance"} or current.startswith("\\nocite"):
                     break
                 paragraph_lines.append(current)
                 i += 1
@@ -1062,6 +1313,28 @@ class LatexParser:
             i += 1
         raise ValueError("Unclosed $$ equation environment.")
 
+    def _parse_bracket_display_math(self, lines: list[str], start: int) -> tuple[EquationBlock, int]:
+        body_lines: list[str] = []
+        first_line = lines[start].strip()
+        if first_line.startswith("\\[") and first_line.endswith("\\]") and len(first_line) > 4:
+            math_text = first_line[2:-2].strip()
+            math_text, label = extract_label(math_text)
+            return EquationBlock(text=math_text, label=label), start + 1
+        if len(first_line) > 2:
+            body_lines.append(first_line[2:].strip())
+        i = start + 1
+        while i < len(lines):
+            line = lines[i].rstrip()
+            if line.strip().endswith("\\]"):
+                if len(line.strip()) > 2:
+                    body_lines.append(line.strip()[:-2].strip())
+                math_text = " ".join(part.strip() for part in body_lines if part.strip())
+                math_text, label = extract_label(math_text)
+                return EquationBlock(text=math_text, label=label), i + 1
+            body_lines.append(line)
+            i += 1
+        raise ValueError("Unclosed \\[ equation environment.")
+
     def _parse_equation(self, lines: list[str], start: int) -> tuple[EquationBlock, int]:
         body_lines: list[str] = []
         i = start + 1
@@ -1132,15 +1405,28 @@ class InlineLatexConverter:
         i = 0
         text = normalize_tex_quotes(normalize_tex_dashes(text.replace("\r", "")))
         while i < len(text):
+            if text.startswith("$$", i):
+                end = text.find("$$", i + 2)
+                if end != -1:
+                    self._append_math_run(runs, text[i + 2:end].strip())
+                    i = end + 2
+                    continue
+            if text.startswith(r"\(", i):
+                end = text.find(r"\)", i + 2)
+                if end != -1:
+                    self._append_math_run(runs, text[i + 2:end].strip())
+                    i = end + 2
+                    continue
+            if text.startswith(r"\[", i):
+                end = text.find(r"\]", i + 2)
+                if end != -1:
+                    self._append_math_run(runs, text[i + 2:end].strip())
+                    i = end + 2
+                    continue
             if text[i] == "$":
                 end = text.find("$", i + 1)
                 if end != -1:
-                    math_text = text[i + 1:end].strip()
-                    try:
-                        math_node = LatexMathParser(math_text).parse()
-                        runs.append(RunSpec(text="", math_node=math_node))
-                    except Exception:
-                        self._append_run(runs, text[i:end+1])
+                    self._append_math_run(runs, text[i + 1:end].strip())
                     i = end + 1
                     continue
             if text[i] == "%" and (i == 0 or text[i - 1] != "\\"):
@@ -1267,6 +1553,16 @@ class InlineLatexConverter:
                 i += 1
             self._append_run(runs, text[start:i])
         return self._normalize_runs(runs)
+
+    def _append_math_run(self, runs: list[RunSpec], math_text: str) -> None:
+        math_text = sanitize_math_text(math_text)
+        if not math_text:
+            return
+        try:
+            math_node = LatexMathParser(math_text).parse()
+        except Exception:
+            math_node = MathTextNode(self.to_plain(math_text))
+        runs.append(RunSpec(text="", math_node=math_node))
 
     def to_plain(self, text: str) -> str:
         return normalize_space("".join(run.text for run in self.to_runs(text)))
@@ -1935,6 +2231,9 @@ class DocxTemplateConverter:
         body.append(self.final_section if self.final_section is not None else ET.Element(qn("w", "sectPr")))
 
     def _selected_bib_entries(self) -> list[BibEntry]:
+        for key in self.parsed.cited_keys:
+            if key not in self.citation_numbers:
+                self.citation_numbers[key] = len(self.citation_numbers) + 1
         if self.parsed.nocite_all or not self.parsed.cited_keys:
             for entry in self.bib_entries:
                 if entry.key not in self.citation_numbers:
@@ -1979,44 +2278,62 @@ class DocxTemplateConverter:
 
     def _format_bib_entry(self, entry: BibEntry) -> str:
         fields = entry.fields
-        authors = clean_bib_value(fields.get("author", "")).replace(" and ", ", ")
+        authors = format_bibtex_names(fields.get("author", ""))
+        title = clean_bib_value(fields.get("title", ""))
+        year = clean_bib_value(fields.get("date", fields.get("year", "")))
+        doi = clean_bib_value(fields.get("doi", ""))
+        doi_text = f" \\url{{https://doi.org/{doi}}}" if doi else ""
         if entry.entry_type == "article":
             journal = clean_bib_value(fields.get("journaltitle", fields.get("journal", "")))
             volume = clean_bib_value(fields.get("volume", ""))
+            number = clean_bib_value(fields.get("number", ""))
             pages = clean_bib_value(fields.get("pages", ""))
-            year = clean_bib_value(fields.get("date", fields.get("year", "")))
-            doi = clean_bib_value(fields.get("doi", ""))
-            base = f"{authors}. {clean_bib_value(fields.get('title', ''))}. {journal} {volume}:{pages} ({year})"
-            return f"{base} \\url{{https://doi.org/{doi}}}" if doi else base
+            volume_issue = f"{volume}({number})" if volume and number else volume
+            journal_bits = journal
+            if volume_issue and pages:
+                journal_bits = f"{journal_bits} {volume_issue}:{pages}".strip()
+            elif volume_issue:
+                journal_bits = f"{journal_bits} {volume_issue}".strip()
+            elif pages:
+                journal_bits = f"{journal_bits}:{pages}".strip(":")
+            base = normalize_space(f"{authors}. {title}. {journal_bits} ({year}).")
+            return f"{base}{doi_text}" if doi_text else base
         if entry.entry_type == "patent":
-            return (
-                f"{authors}. {clean_bib_value(fields.get('title', ''))}. "
+            base = (
+                f"{authors}. {title}. "
                 f"{clean_bib_value(fields.get('type', 'Patent'))} {clean_bib_value(fields.get('number', ''))}. "
-                f"({clean_bib_value(fields.get('date', fields.get('year', '')))})"
+                f"({year})."
             )
+            return normalize_space(base)
         if entry.entry_type == "book":
             base = (
-                f"{authors}. {clean_bib_value(fields.get('title', ''))}. "
+                f"{authors}. {title}. "
                 f"{clean_bib_value(fields.get('publisher', ''))} "
-                f"({clean_bib_value(fields.get('date', fields.get('year', '')))})"
+                f"({year})."
             )
             isbn = clean_bib_value(fields.get("isbn", ""))
-            return f"{base}. ISBN {isbn}" if isbn else base
+            return normalize_space(f"{base} ISBN {isbn}") if isbn else normalize_space(base)
         if entry.entry_type in {"incollection", "inbook"}:
-            editors = clean_bib_value(fields.get("editor", "")).replace(" and ", ", ")
+            editors = format_bibtex_names(fields.get("editor", ""))
+            pages = clean_bib_value(fields.get("pages", ""))
+            pages_text = f":{pages}" if pages else ""
+            publisher = clean_bib_value(fields.get("publisher", ""))
             return (
-                f"{authors}. {clean_bib_value(fields.get('title', ''))}. In: "
+                f"{authors}. {title}. In: "
                 f"{clean_bib_value(fields.get('booktitle', ''))}. Ed: {editors}. "
-                f"{clean_bib_value(fields.get('publisher', ''))} "
-                f"({clean_bib_value(fields.get('date', fields.get('year', '')))})"
+                f"{publisher}{pages_text} ({year}).{doi_text}"
             )
         if entry.entry_type == "online":
-            author = authors or clean_bib_value(fields.get("title", ""))
-            return (
-                f"{author}. \\url{{{clean_bib_value(fields.get('url', ''))}}} "
-                f"[accessed {clean_bib_value(fields.get('urldate', 'Date'))}]"
+            author_text = f"{authors}. " if authors else ""
+            accessed = clean_bib_value(fields.get("urldate", "Date"))
+            return normalize_space(
+                f"{author_text}{title}. \\url{{{clean_bib_value(fields.get('url', ''))}}} "
+                f"[accessed {accessed}]"
             )
-        return normalize_space(f"{authors}. {clean_bib_value(fields.get('title', ''))}")
+        if entry.entry_type == "techreport":
+            institution = clean_bib_value(fields.get("institution", ""))
+            return normalize_space(f"{authors}. {title}. {institution} ({year}).{doi_text}")
+        return normalize_space(f"{authors}. {title}. ({year}).{doi_text}")
 
     def _equation_paragraph(self, value: str, equation_index: int) -> ET.Element:
         paragraph = ET.Element(qn("w", "p"))
@@ -2033,13 +2350,15 @@ class DocxTemplateConverter:
             if cmd == "eqref": return f"({ref_text})"
             if cmd == "autoref" and ref_text.isdigit(): return f"Eq. {ref_text}"
             return ref_text
-        value = re.sub(r"\\(ref|autoref|eqref)\{([^}]+)\}", repl_ref, value)
+        value = sanitize_math_text(re.sub(r"\\(ref|autoref|eqref)\{([^}]+)\}", repl_ref, value))
 
         try:
-            equation_root = ET.SubElement(paragraph, qn("m", "oMath"))
-            self._build_math_node(equation_root, LatexMathParser(value).parse())
+            math_node = LatexMathParser(value).parse()
         except Exception:
             paragraph.append(self._run(RunSpec(self.inline.to_plain(value))))
+        else:
+            equation_root = ET.SubElement(paragraph, qn("m", "oMath"))
+            self._build_math_node(equation_root, math_node)
         paragraph.append(self._tab_run())
         paragraph.append(self._tab_run())
         paragraph.append(self._tab_run())
@@ -2113,7 +2432,7 @@ class DocxTemplateConverter:
             symbol = ET.SubElement(nary_pr, qn("m", "chr"))
             symbol.set(qn("m", "val"), node.operator)
             lim_loc = ET.SubElement(nary_pr, qn("m", "limLoc"))
-            lim_loc.set(qn("m", "val"), "subSup")
+            lim_loc.set(qn("m", "val"), node.lim_loc)
             self._append_math_ctrl_pr(nary_pr)
             if node.sub is not None:
                 sub = ET.SubElement(nary, qn("m", "sub"))
