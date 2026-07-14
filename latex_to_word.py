@@ -1382,28 +1382,63 @@ def remove_content_type_default(package_entries: dict[str, bytes], ext: str) -> 
     package_entries["[Content_Types].xml"] = serialize_xml(root, default_namespace=CT_NS)
 
 
+EMBEDDED_FONT_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+EMBEDDED_FONT_KEEP_PREFIXES = ("inter", "stix two")
+
+
+def keep_embedded_font(font_name: str) -> bool:
+    normalized = re.sub(r"\s+", " ", font_name).strip().lower()
+    return any(normalized == prefix or normalized.startswith(f"{prefix} ") for prefix in EMBEDDED_FONT_KEEP_PREFIXES)
+
+
+def font_table_relationship_path(font_table_name: str) -> str:
+    font_table_dir = posixpath.dirname(font_table_name)
+    font_table_file = posixpath.basename(font_table_name)
+    return f"{font_table_dir}/_rels/{font_table_file}.rels"
+
+
 def strip_embedded_fonts(package_entries: dict[str, bytes]) -> None:
-    for name in list(package_entries):
-        if name.startswith("word/fonts/"):
-            del package_entries[name]
-    for rels_name in ("word/_rels/fontTable.xml.rels", "word/glossary/_rels/fontTable.xml.rels"):
-        package_entries.pop(rels_name, None)
     embed_tags = {
         qn("w", "embedRegular"),
         qn("w", "embedBold"),
         qn("w", "embedItalic"),
         qn("w", "embedBoldItalic"),
     }
+    retained_font_parts: set[str] = set()
     for font_table_name in ("word/fontTable.xml", "word/glossary/fontTable.xml"):
         if font_table_name not in package_entries:
             continue
+        rels_name = font_table_relationship_path(font_table_name)
+        rel_root = ET.fromstring(package_entries[rels_name]) if rels_name in package_entries else None
+        rels_by_id = {rel.attrib.get("Id", ""): rel for rel in rel_root} if rel_root is not None else {}
+        keep_rel_ids: set[str] = set()
         root = ET.fromstring(package_entries[font_table_name])
-        for parent in root.iter():
+        for parent in root.findall(qn("w", "font")):
+            font_name = parent.attrib.get(qn("w", "name"), "")
+            keep_font = keep_embedded_font(font_name)
             for child in list(parent):
                 if child.tag in embed_tags:
-                    parent.remove(child)
+                    rel_id = child.attrib.get(qn("r", "id"), "")
+                    rel = rels_by_id.get(rel_id)
+                    if keep_font and rel is not None:
+                        keep_rel_ids.add(rel_id)
+                        retained_font_parts.add(resolve_package_target(font_table_name, rel.attrib.get("Target", "")))
+                    else:
+                        parent.remove(child)
         package_entries[font_table_name] = serialize_xml(root)
-    remove_content_type_default(package_entries, "odttf")
+        if rel_root is not None:
+            for rel in list(rel_root):
+                if rel.attrib.get("Type") == EMBEDDED_FONT_REL_TYPE and rel.attrib.get("Id", "") not in keep_rel_ids:
+                    rel_root.remove(rel)
+            if any(rel.attrib.get("Type") == EMBEDDED_FONT_REL_TYPE for rel in rel_root):
+                package_entries[rels_name] = serialize_xml(rel_root, default_namespace=REL_NS)
+            else:
+                package_entries.pop(rels_name, None)
+    for name in list(package_entries):
+        if name.startswith("word/fonts/") and name not in retained_font_parts:
+            del package_entries[name]
+    if not any(name.startswith("word/fonts/") for name in package_entries):
+        remove_content_type_default(package_entries, "odttf")
 
 
 def relationship_source_part(rels_path: str) -> str | None:
