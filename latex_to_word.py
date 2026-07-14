@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import posixpath
 import re
 import secrets
 import struct
@@ -108,6 +109,10 @@ def normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def normalize_tex_dashes(value: str) -> str:
+    return value.replace("---", "\u2014").replace("--", "\u2013")
+
+
 def normalize_tex_quotes(value: str) -> str:
     return value.replace("``", "“").replace("''", "”")
 
@@ -204,6 +209,42 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def is_in_tex_line_comment(text: str, pos: int) -> bool:
+    line_start = text.rfind("\n", 0, pos) + 1
+    i = line_start
+    while i < pos:
+        comment = text.find("%", i, pos)
+        if comment == -1:
+            return False
+        if comment == 0 or text[comment - 1] != "\\":
+            return True
+        i = comment + 1
+    return False
+
+
+def strip_comment_environments(text: str) -> str:
+    begin_re = re.compile(r"\\begin\s*\{\s*comment\s*\}")
+    end_re = re.compile(r"\\end\s*\{\s*comment\s*\}")
+    out: list[str] = []
+    pos = 0
+    while True:
+        begin = begin_re.search(text, pos)
+        while begin is not None and is_in_tex_line_comment(text, begin.start()):
+            begin = begin_re.search(text, begin.end())
+        if begin is None:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:begin.start()])
+        end = end_re.search(text, begin.end())
+        if end is None:
+            out.append("\n" * text[begin.start():].count("\n"))
+            break
+        removed = text[begin.start():end.end()]
+        out.append("\n" * removed.count("\n"))
+        pos = end.end()
+    return "".join(out)
+
+
 def extract_label(text: str) -> tuple[str, str | None]:
     match = re.search(r"\\label\{([^}]+)\}", text)
     if match:
@@ -222,7 +263,7 @@ def clean_bib_value(value: str) -> str:
     value = value.replace("\\&", "&")
     value = value.replace("\\_", "_")
     value = re.sub(r"[{}]", "", value)
-    return normalize_space(value)
+    return normalize_space(normalize_tex_dashes(value))
 
 
 def load_latex_source(tex_path: Path, seen: set[Path] | None = None) -> str:
@@ -803,18 +844,20 @@ class LatexParser:
 
     def __init__(self, tex_path: Path):
         self.tex_path = tex_path
-        self.text = load_latex_source(tex_path)
-        self.metadata = {key: extract_command_body(self.text, key) or "" for key in self.METADATA_KEYS}
+        self.text = strip_comment_environments(load_latex_source(tex_path))
+        self.active_text = strip_comments(self.text)
+        self.metadata = {key: extract_command_body(self.active_text, key) or "" for key in self.METADATA_KEYS}
         self.document_body = self._resolve_macros(self._extract_document_body())
         self.bib_path = self._extract_bib_path()
-        self.nocite_all = "\\nocite{*}" in self.document_body
+        self.active_document_body = strip_comments(strip_comment_environments(self.document_body))
+        self.nocite_all = re.search(r"\\nocite\s*\{\s*\*\s*\}", self.active_document_body) is not None
 
     def _resolve_macros(self, text: str) -> str:
         macros = {}
-        for match in re.finditer(r"\\(?:re)?newcommand\{\\([a-zA-Z]+)\}", self.text):
+        for match in re.finditer(r"\\(?:re)?newcommand\{\\([a-zA-Z]+)\}", self.active_text):
             macro_name = match.group(1)
             if macro_name not in self.METADATA_KEYS:
-                body = extract_command_body(self.text, macro_name)
+                body = extract_command_body(self.active_text, macro_name)
                 if body is not None:
                     macros[macro_name] = body
         for name, body in macros.items():
@@ -823,20 +866,20 @@ class LatexParser:
         return text
 
     def _extract_document_body(self) -> str:
-        start = self.text.find("\\begin{document}")
-        end = self.text.find("\\end{document}")
+        start = self.active_text.find("\\begin{document}")
+        end = self.active_text.find("\\end{document}")
         if start == -1 or end == -1:
             raise ValueError("Could not find a complete document body in the LaTeX input.")
-        return self.text[start + len("\\begin{document}") : end]
+        return self.active_text[start + len("\\begin{document}") : end]
 
     def _extract_bib_path(self) -> Path:
-        match = re.search(r"\\addbibresource\{([^}]+)\}", self.text)
+        match = re.search(r"\\addbibresource\{([^}]+)\}", self.active_text)
         if match:
             return (self.tex_path.parent / match.group(1)).resolve()
         return (self.tex_path.parent / "refs.bib").resolve()
 
     def parse(self) -> ParsedDocument:
-        body = strip_comments(self.document_body)
+        body = self.active_document_body
         lines = body.splitlines()
         blocks: list[Block] = []
         i = 0
@@ -1072,6 +1115,12 @@ class InlineLatexConverter:
         "\\,": " ",
         "\\;": " ",
     }
+    SIMPLE_COMMANDS = {
+        "\\textemdash": "\u2014",
+        "\\emdash": "\u2014",
+        "\\textendash": "\u2013",
+        "\\endash": "\u2013",
+    }
 
     def __init__(self, citation_numbers: dict[str, int], cited_keys: list[str], reference_numbers: dict[str, str] | None = None):
         self.citation_numbers = citation_numbers
@@ -1081,7 +1130,7 @@ class InlineLatexConverter:
     def to_runs(self, text: str) -> list[RunSpec]:
         runs: list[RunSpec] = []
         i = 0
-        text = normalize_tex_quotes(text.replace("\r", ""))
+        text = normalize_tex_quotes(normalize_tex_dashes(text.replace("\r", "")))
         while i < len(text):
             if text[i] == "$":
                 end = text.find("$", i + 1)
@@ -1105,7 +1154,7 @@ class InlineLatexConverter:
             if text.startswith("\\href", i):
                 url, pos = parse_braced(text, i + len("\\href"))
                 label, pos = parse_braced(text, pos)
-                self._append_run(runs, self.to_plain(label), hyperlink=self.to_plain(url))
+                self._append_styled_runs(runs, self.to_runs(label), hyperlink=self.to_plain(url))
                 i = pos
                 continue
             if text.startswith("\\autoref", i) or text.startswith("\\ref", i):
@@ -1131,12 +1180,12 @@ class InlineLatexConverter:
                 continue
             if text.startswith("\\textsuperscript", i):
                 inner, pos = parse_braced(text, i + len("\\textsuperscript"))
-                self._append_run(runs, self.to_plain(inner), superscript=True)
+                self._append_styled_runs(runs, self.to_runs(inner), superscript=True)
                 i = pos
                 continue
             if text.startswith("\\texttt", i):
                 inner, pos = parse_braced(text, i + len("\\texttt"))
-                self._append_run(runs, self.to_plain(inner))
+                self._append_styled_runs(runs, self.to_runs(inner))
                 i = pos
                 continue
             if text.startswith("\\cite", i):
@@ -1154,13 +1203,13 @@ class InlineLatexConverter:
                 continue
             if text.startswith("\\textbf", i):
                 inner, pos = parse_braced(text, i + len("\\textbf"))
-                self._append_run(runs, self.to_plain(inner), bold=True)
+                self._append_styled_runs(runs, self.to_runs(inner), bold=True)
                 i = pos
                 continue
             if text.startswith("\\textit", i) or text.startswith("\\emph", i):
                 command = "\\textit" if text.startswith("\\textit", i) else "\\emph"
                 inner, pos = parse_braced(text, i + len(command))
-                self._append_run(runs, self.to_plain(inner), italic=True)
+                self._append_styled_runs(runs, self.to_runs(inner), italic=True)
                 i = pos
                 continue
             if text.startswith("\\textcopyright", i):
@@ -1184,13 +1233,24 @@ class InlineLatexConverter:
                     break
             if replaced:
                 continue
+            for command, replacement in self.SIMPLE_COMMANDS.items():
+                if text.startswith(command, i) and self._command_boundary(text, i + len(command)):
+                    pos = i + len(command)
+                    if pos < len(text) and text[pos] == "{":
+                        _, pos = parse_braced(text, pos)
+                    self._append_run(runs, replacement)
+                    i = pos
+                    replaced = True
+                    break
+            if replaced:
+                continue
             if text[i] == "\\":
                 j = i + 1
                 while j < len(text) and (text[j].isalpha() or text[j] == "*"):
                     j += 1
                 if j < len(text) and text[j] == "{":
                     inner, pos = parse_braced(text, j)
-                    self._append_run(runs, self.to_plain(inner))
+                    self._append_styled_runs(runs, self.to_runs(inner))
                     i = pos
                     continue
                 i = j if j > i + 1 else i + 1
@@ -1210,6 +1270,37 @@ class InlineLatexConverter:
 
     def to_plain(self, text: str) -> str:
         return normalize_space("".join(run.text for run in self.to_runs(text)))
+
+    def _command_boundary(self, text: str, pos: int) -> bool:
+        return pos >= len(text) or not text[pos].isalpha()
+
+    def _append_styled_runs(
+        self,
+        runs: list[RunSpec],
+        styled_runs: list[RunSpec],
+        *,
+        superscript: bool = False,
+        hyperlink: str | None = None,
+        bold: bool = False,
+        italic: bool = False,
+    ) -> None:
+        for run in styled_runs:
+            if run.math_node is not None:
+                current = copy.deepcopy(run)
+                current.bold = current.bold or bold
+                current.italic = current.italic or italic
+                current.superscript = current.superscript or superscript
+                current.hyperlink = current.hyperlink or hyperlink
+                runs.append(current)
+                continue
+            self._append_run(
+                runs,
+                run.text,
+                superscript=run.superscript or superscript,
+                hyperlink=run.hyperlink or hyperlink,
+                bold=run.bold or bold,
+                italic=run.italic or italic,
+            )
 
     def _append_run(
         self,
@@ -1278,6 +1369,97 @@ def add_content_type(content_root: ET.Element, ext: str) -> None:
     default = ET.SubElement(content_root, f"{{{CT_NS}}}Default")
     default.set("Extension", ext)
     default.set("ContentType", content_type)
+
+
+def remove_content_type_default(package_entries: dict[str, bytes], ext: str) -> None:
+    if "[Content_Types].xml" not in package_entries:
+        return
+    ext = ext.lstrip(".").lower()
+    root = ET.fromstring(package_entries["[Content_Types].xml"])
+    for elem in list(root):
+        if elem.tag == f"{{{CT_NS}}}Default" and elem.attrib.get("Extension", "").lower() == ext:
+            root.remove(elem)
+    package_entries["[Content_Types].xml"] = serialize_xml(root, default_namespace=CT_NS)
+
+
+def strip_embedded_fonts(package_entries: dict[str, bytes]) -> None:
+    for name in list(package_entries):
+        if name.startswith("word/fonts/"):
+            del package_entries[name]
+    for rels_name in ("word/_rels/fontTable.xml.rels", "word/glossary/_rels/fontTable.xml.rels"):
+        package_entries.pop(rels_name, None)
+    embed_tags = {
+        qn("w", "embedRegular"),
+        qn("w", "embedBold"),
+        qn("w", "embedItalic"),
+        qn("w", "embedBoldItalic"),
+    }
+    for font_table_name in ("word/fontTable.xml", "word/glossary/fontTable.xml"):
+        if font_table_name not in package_entries:
+            continue
+        root = ET.fromstring(package_entries[font_table_name])
+        for parent in root.iter():
+            for child in list(parent):
+                if child.tag in embed_tags:
+                    parent.remove(child)
+        package_entries[font_table_name] = serialize_xml(root)
+    remove_content_type_default(package_entries, "odttf")
+
+
+def relationship_source_part(rels_path: str) -> str | None:
+    if not rels_path.endswith(".rels") or "/_rels/" not in rels_path:
+        return None
+    prefix, rels_name = rels_path.rsplit("/_rels/", 1)
+    return f"{prefix}/{rels_name[:-5]}"
+
+
+def relationship_ids_in_xml(xml_bytes: bytes) -> set[str]:
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return set()
+    rel_attrs = {qn("r", "id"), qn("r", "embed"), qn("r", "link")}
+    return {value for node in root.iter() for attr, value in node.attrib.items() if attr in rel_attrs}
+
+
+def resolve_package_target(source_part: str, target: str) -> str:
+    base_dir = posixpath.dirname(source_part)
+    return posixpath.normpath(posixpath.join(base_dir, target)).lstrip("/")
+
+
+def prune_unused_media_relationships(package_entries: dict[str, bytes]) -> None:
+    referenced_media: set[str] = set()
+    prunable_types = {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+    }
+    image_type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+    for rels_name in [name for name in list(package_entries) if name.endswith(".rels")]:
+        source_part = relationship_source_part(rels_name)
+        if source_part is None or source_part not in package_entries:
+            continue
+        used_ids = relationship_ids_in_xml(package_entries[source_part])
+        root = ET.fromstring(package_entries[rels_name])
+        changed = False
+        for rel in list(root):
+            rel_type = rel.attrib.get("Type", "")
+            rel_id = rel.attrib.get("Id", "")
+            if rel_type in prunable_types and rel_id not in used_ids:
+                root.remove(rel)
+                changed = True
+                continue
+            if rel_type == image_type and rel.attrib.get("TargetMode") != "External":
+                referenced_media.add(resolve_package_target(source_part, rel.attrib.get("Target", "")))
+        if changed:
+            package_entries[rels_name] = serialize_xml(root, default_namespace=REL_NS)
+    for name in list(package_entries):
+        if name.startswith("word/media/") and name not in referenced_media:
+            del package_entries[name]
+
+
+def cleanup_docx_package(package_entries: dict[str, bytes]) -> None:
+    strip_embedded_fonts(package_entries)
+    prune_unused_media_relationships(package_entries)
 
 
 def unique_media_name_in_set(existing_names: set[str], stem: str, suffix: str) -> str:
@@ -1590,6 +1772,7 @@ class DocxTemplateConverter:
         package_entries["word/document.xml"] = serialize_document_xml(doc_tree.getroot())
         package_entries["word/_rels/document.xml.rels"] = serialize_xml(rel_tree.getroot(), default_namespace=REL_NS)
         package_entries["[Content_Types].xml"] = serialize_xml(content_tree.getroot(), default_namespace=CT_NS)
+        cleanup_docx_package(package_entries)
 
         with zipfile.ZipFile(self.output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for name in sorted(package_entries):
