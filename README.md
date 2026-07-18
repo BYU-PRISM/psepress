@@ -27,7 +27,7 @@ Anyone can use the hosted app to upload a zipped LaTeX archive and convert it in
 ```powershell
 cd .\psepress
 python -m pip install -r requirements.txt
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 ## Offline batch conversion
