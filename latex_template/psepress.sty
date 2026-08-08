@@ -1,0 +1,507 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{psepress}[2026/03/25 PSE Press article and review template styles]
+
+\newif\ifpsereviewmode
+\newif\ifpsemodeexplicit
+\psereviewmodefalse
+\DeclareOption{review}{\psereviewmodetrue\psemodeexplicittrue}
+\DeclareOption{final}{\psereviewmodefalse\psemodeexplicittrue}
+\ProcessOptions\relax
+\makeatletter
+\@ifclassloaded{preprint}{%
+  \ifpsemodeexplicit\else
+    \psereviewmodetrue
+  \fi
+}{}
+\makeatother
+
+\RequirePackage{iftex}
+\ifPDFTeX
+  \PackageError{psepress}{This template requires XeLaTeX or LuaLaTeX}{Use xelatex or lualatex to compile this document.}
+\fi
+
+\RequirePackage{afterpage}
+\RequirePackage{amsmath}
+\RequirePackage{amssymb}
+\RequirePackage{array}
+\RequirePackage{balance}
+\RequirePackage[
+  backend=biber,
+  style=numeric-comp,
+  sorting=none,
+  giveninits=true,
+  maxbibnames=99,
+  doi=true,
+  url=true,
+  isbn=true
+]{biblatex}
+\RequirePackage{booktabs}
+\RequirePackage{caption}
+\RequirePackage{fancyhdr}
+\RequirePackage{fontspec}
+\RequirePackage{geometry}
+\RequirePackage{graphicx}
+\RequirePackage{hyperref}
+\RequirePackage{indentfirst}
+\RequirePackage{listings}
+\ifpsereviewmode
+  \RequirePackage{lineno}
+\fi
+\RequirePackage{microtype}
+\RequirePackage{ragged2e}
+\ifpsereviewmode
+  \RequirePackage{setspace}
+\fi
+\RequirePackage{tabularx}
+\RequirePackage{titlesec}
+\RequirePackage{unicode-math}
+\RequirePackage{xcolor}
+\RequirePackage{xurl}
+
+\newcommand{\psearticleleftmargin}{2.1cm}
+\newcommand{\psearticlerightmargin}{2.1cm}
+\newcommand{\psearticletopmargin}{2.1cm}
+\newcommand{\psearticlebottommargin}{3.1cm}
+\newcommand{\psearticlefooteroffset}{2.3cm}
+\newcommand{\psearticlefirstpagetexttop}{2.5cm}
+\newcommand{\psearticleheaderrightdrop}{0.2cm}
+\newcommand{\psearticleheadertotitlesep}{0.65cm}
+\newcommand{\psearticlepressraise}{0.10cm}
+\newcommand{\pseabstractwidthreduction}{1.70cm}
+
+\newcommand{\psearticlegeometry}{%
+  \geometry{
+    left=\psearticleleftmargin,
+    right=\psearticlerightmargin,
+    top=\psearticletopmargin,
+    bottom=\psearticlebottommargin,
+    includefoot,
+    headheight=14pt,
+    headsep=10pt,
+    footskip=\psearticlefooteroffset
+  }%
+}
+
+\newcommand{\psereviewgeometry}{%
+  \geometry{
+    left=2.54cm,
+    right=2.54cm,
+    top=2.54cm,
+    bottom=2.54cm,
+    headheight=12pt,
+    headsep=14pt,
+    footskip=1.2cm
+  }%
+}
+
+\ifpsereviewmode
+  \psereviewgeometry
+\else
+  \psearticlegeometry
+\fi
+
+\graphicspath{{media/}}
+\urlstyle{same}
+
+\definecolor{PSEBlue}{HTML}{00509E}
+\definecolor{PSEGray}{HTML}{A6A6A6}
+\definecolor{PSEDark}{HTML}{111111}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=PSEBlue,
+  citecolor=PSEBlue,
+  urlcolor=PSEBlue
+}
+
+\setmainfont{Inter-Regular}[
+  Path=fonts/,
+  Extension=.ttf,
+  UprightFont=*,
+  BoldFont=Inter-Bold,
+  ItalicFont=Inter-Italic
+]
+\newfontfamily\intermedium{Inter-Medium}[Path=fonts/,Extension=.ttf]
+\setmonofont{CourierNew}[Path=fonts/,Extension=.ttf]
+\setmathfont{CambriaMath}[Path=fonts/,Extension=.ttf]
+
+\setlength{\columnsep}{0.586cm}
+\setlength{\parindent}{0.425cm}
+\setlength{\parskip}{0pt}
+\setlength{\textfloatsep}{12pt}
+\setlength{\intextsep}{12pt}
+\setlength{\abovecaptionskip}{6pt}
+\setlength{\belowcaptionskip}{0pt}
+\setlength{\bibitemsep}{0pt}
+\setlength{\bibhang}{0.425cm}
+\clubpenalty=0
+\widowpenalty=0
+\displaywidowpenalty=0
+\emergencystretch=2em
+\Urlmuskip=0mu plus 2mu
+
+\makeatletter
+\renewcommand\normalsize{%
+  \@setfontsize\normalsize{9pt}{11pt}%
+  \abovedisplayskip 9pt plus 2pt minus 4pt%
+  \abovedisplayshortskip \z@ plus 2pt%
+  \belowdisplayshortskip 5pt plus 2pt minus 3pt%
+  \belowdisplayskip \abovedisplayskip
+  \let\@listi\@listI
+}
+\makeatother
+\normalsize
+
+\DeclareCaptionFont{psecaption}{\fontsize{9}{11}\selectfont}
+\captionsetup{
+  font=psecaption,
+  labelfont=normalfont,
+  textfont=normalfont,
+  justification=justified,
+  singlelinecheck=false
+}
+\captionsetup[figure]{labelsep=period}
+\captionsetup[table]{labelsep=colon}
+
+\lstdefinestyle{psecode}{
+  basicstyle=\ttfamily\fontsize{9}{12}\selectfont,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=none,
+  xleftmargin=0pt,
+  aboveskip=6pt,
+  belowskip=0pt
+}
+
+\setcounter{secnumdepth}{0}
+
+\titleformat{\section}
+  {\intermedium\fontsize{12}{13}\selectfont\color{PSEBlue}}
+  {}
+  {0pt}
+  {\MakeUppercase}
+\titlespacing*{\section}{0pt}{12pt}{2pt}
+
+\titleformat{\subsection}
+  {\intermedium\fontsize{11}{12}\selectfont\color{PSEBlue}}
+  {}
+  {0pt}
+  {}
+\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+
+\titleformat{\subsubsection}
+  {\intermedium\fontsize{10}{11}\selectfont\color{PSEBlue}}
+  {}
+  {0pt}
+  {}
+\titlespacing*{\subsubsection}{0pt}{4pt}{2pt}
+
+\titleformat{\paragraph}[block]
+  {\fontsize{10}{11}\selectfont\color{PSEBlue}}
+  {}
+  {0pt}
+  {}
+\titlespacing*{\paragraph}{0pt}{4pt}{0pt}
+
+\newcommand{\psetitlefont}{\fontsize{18}{22}\selectfont}
+\newcommand{\pseauthorfont}{\bfseries\fontsize{10}{12}\selectfont\color{PSEBlue}}
+\newcommand{\pseaffilfont}{\fontsize{8}{11}\selectfont}
+\newcommand{\pseabstractheadfont}{\intermedium\fontsize{12}{13}\selectfont\color{PSEBlue}}
+\newcommand{\psekeywordsfont}{\fontsize{8}{10}\selectfont}
+\newcommand{\psefooterfont}{\fontsize{8}{9}\selectfont\color{PSEDark}}
+\newcommand{\psecopyrightfont}{\fontsize{8}{10}\selectfont}
+
+\newcommand{\PaperTitle}{Place Your Paper Title Here with Title Capitalization that May Run Multiple Lines}
+\newcommand{\PaperAuthors}{%
+Firstname Q.~Lastname\textsuperscript{a},
+Givenname R.~S.~Surname Jr.\textsuperscript{ab},
+and Personwith MULTIWORD LASTNAME\textsuperscript{b*}}
+\newcommand{\PaperAffiliations}{%
+\textsuperscript{a} Provincial University, Department of Chemical Engineering, City, Province, Country\\
+\textsuperscript{b} State College, Engineering Department, City, State, Country\\
+\textsuperscript{*} Corresponding Author: \href{mailto:author.email@someuniversity.ca}{author.email@someuniversity.ca}}
+\newcommand{\PaperAbstract}{%
+Type your abstract text here. Please limit to 250 words. This block is already formatted with the
+correct abstract styling for the template.
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore
+et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut
+aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa
+qui officia deserunt mollit anim id est laborum.}
+\newcommand{\PaperKeywords}{%
+Choose an item., Choose an item., Choose an item., Choose an item., Choose an item. additional
+keywords separated by commas}
+\newcommand{\PaperCopyrightText}{%
+\textcopyright\ 2027 by the authors. Licensed to PSEcommunity.org and PSE Press. This is an open
+access article under the creative commons CC-BY-SA licensing terms. Credit must be given to creator
+and adaptations must be shared under the same terms. See
+\url{https://creativecommons.org/licenses/by-sa/4.0/}.}
+
+\newcommand{\HeaderArticleType}{Original Research Article}
+\newcommand{\HeaderReviewType}{Peer Reviewed Conference Proceeding}
+\newcommand{\HeaderConference}{ESCAPE 37 - European Symposium on Computer Aided Process Engineering}
+\newcommand{\HeaderLocation}{Trondheim, Norway, 6-9 June 2027}
+\newcommand{\FooterJournalInfo}{Syst Control Trans V:XXXX-YYYY (2027)}
+\newcommand{\FirstPageFooterID}{[DOI\_DoNotChange]}
+\newcommand{\BodyPageFooterID}{[LAPSE\_DoNotChange]}
+
+\newcommand{\PSESetConference}[2]{%
+  \renewcommand{\HeaderConference}{#1}%
+  \renewcommand{\HeaderLocation}{#2}%
+}
+
+\makeatletter
+\expandafter\def\csname pseconference@escape-37-2027\endcsname{%
+  \PSESetConference
+    {ESCAPE 37 - European Symposium on Computer Aided Process Engineering}%
+    {Trondheim, Norway, 6-9 June 2027}%
+}
+\expandafter\def\csname pseconference@pse-2027\endcsname{%
+  \PSESetConference
+    {PSE 2027 – Process Systems Engineering}%
+    {Mexico City, Mexico, 13-17 June 2027}%
+}
+\expandafter\def\csname pseconference@focapo-cpc-2027\endcsname{%
+  \PSESetConference
+    {FOCAPO-CPC 2027}%
+    {Tucson, Arizona, USA, 10-14 January 2027}%
+}
+\newcommand{\PSESelectConference}[1]{%
+  \@ifundefined{pseconference@#1}{%
+    \PackageError{psepress}{Unknown conference preset `#1'}%
+      {Use escape-37-2027, pse-2027, focapo-cpc-2027, or \string\PSESetConference.}%
+  }{%
+    \csname pseconference@#1\endcsname
+  }%
+}
+\makeatother
+
+\newcommand{\psefirstpagefooterid}[1]{{\psefooterfont\color{PSEBlue}#1}}
+\newcommand{\psebodypagefooterid}[1]{{\psefooterfont\bfseries#1}}
+\newcommand{\psefooterjournal}{{\psefooterfont\bfseries\FooterJournalInfo}}
+\newcommand{\psefooterpage}{{\psefooterfont\bfseries\thepage}}
+
+\newcommand{\pseconfigurefancywidths}{%
+  \fancyheadoffset[L,R]{0pt}%
+  \fancyfootoffset[L,R]{0pt}%
+  \setlength{\headwidth}{\textwidth}%
+}
+
+\newcommand{\psefootrule}{%
+  {\color{PSEGray}\hrule height 0.4pt width \headwidth\relax}%
+  \vskip2pt
+}
+
+\newcommand{\pseapplyarticlefooterstyle}[2]{%
+  \fancyhf{}%
+  \fancyhead{}%
+  \pseconfigurefancywidths
+  \fancyfoot[L]{#1{#2}}%
+  \fancyfoot[C]{\psefooterjournal}%
+  \fancyfoot[R]{\psefooterpage}%
+  \renewcommand{\headrulewidth}{0pt}%
+  \renewcommand{\footrulewidth}{0.4pt}%
+  \renewcommand{\footrule}{\psefootrule}%
+}
+
+\newcommand{\pseapplyreviewpagestyle}{%
+  \fancyhf{}%
+  \fancyhead{}%
+  \pseconfigurefancywidths
+  \renewcommand{\headrulewidth}{0pt}%
+  \renewcommand{\footrulewidth}{0pt}%
+}
+
+\newcommand{\psearticleleftheader}{%
+  \begin{minipage}[b]{5.78cm}%
+    \includegraphics[width=5.78cm]{systems-control-transactions.png}%
+  \end{minipage}%
+}
+
+\newcommand{\psearticleheadermetadata}{%
+  \begin{minipage}[b]{4.55cm}%
+    \raggedleft
+    {\psefooterfont\bfseries \HeaderArticleType\par}%
+    {\psefooterfont\itshape \HeaderReviewType\par}%
+    {\psefooterfont \HeaderConference\par}%
+    {\psefooterfont \HeaderLocation\par}%
+  \end{minipage}%
+}
+
+\newcommand{\psearticlerightheader}{%
+  \begin{minipage}[b]{6.2cm}%
+    \raggedleft
+    \psearticleheadermetadata\hspace{0.22cm}%
+    \raisebox{\psearticlepressraise}[0pt][0pt]{\includegraphics[width=1.11cm]{pse-press.png}}%
+  \end{minipage}%
+}
+
+\newcommand{\psearticleheaderblock}{%
+  \noindent
+  \begin{minipage}[t]{\textwidth}%
+    \noindent
+    \begin{minipage}[t]{5.78cm}%
+      \includegraphics[width=5.78cm]{systems-control-transactions.png}%
+    \end{minipage}%
+    \hfill
+    \raisebox{-\psearticleheaderrightdrop}[0pt][0pt]{\psearticlerightheader}%
+  \end{minipage}\par
+}
+
+\fancypagestyle{psearticlefirstpage}{%
+  \pseapplyarticlefooterstyle{\psefirstpagefooterid}{\FirstPageFooterID}
+}
+
+\fancypagestyle{psearticlebody}{%
+  \pseapplyarticlefooterstyle{\psebodypagefooterid}{\BodyPageFooterID}
+}
+
+\fancypagestyle{psereview}{%
+  \pseapplyreviewpagestyle
+}
+
+\fancypagestyle{plain}{%
+  \ifpsereviewmode
+    \pseapplyreviewpagestyle
+  \else
+    \pseapplyarticlefooterstyle{\psebodypagefooterid}{\BodyPageFooterID}
+  \fi
+}
+
+\newcommand{\psearticleabstractblock}{%
+  \begin{center}
+    \begin{minipage}{\dimexpr\textwidth-\pseabstractwidthreduction\relax}
+      \hrule height 0.5pt
+      \vspace{8pt}
+      {\pseabstractheadfont\MakeUppercase{Abstract}\par}
+      \vspace{4pt}
+      \noindent\justifying
+      \PaperAbstract\par
+      \vspace{6pt}
+      \hrule height 0.5pt
+      \vspace{6pt}
+      {\psekeywordsfont Keywords: \PaperKeywords\par}
+    \end{minipage}
+  \end{center}
+}
+
+\newcommand{\psereviewabstractblock}{%
+  \noindent{\pseabstractheadfont\MakeUppercase{Abstract}\par}
+  \vspace{4pt}
+  \noindent\justifying
+  \PaperAbstract\par
+  \vspace{8pt}
+  {\psekeywordsfont\noindent Keywords: \PaperKeywords\par}
+}
+
+\newcommand{\pseabstractblock}{%
+  \ifpsereviewmode
+    \psereviewabstractblock
+  \else
+    \psearticleabstractblock
+  \fi
+}
+
+\newcommand{\pseactivatearticlebodygeometry}{}
+
+\newcommand{\psereviewstartlinenumbers}{%
+  \ifpsereviewmode
+    \setlength{\linenumbersep}{0.65cm}%
+    \renewcommand{\linenumberfont}{\normalfont\fontsize{7}{7}\selectfont\color{PSEGray}}%
+    \modulolinenumbers[1]%
+    \linenumbers
+  \fi
+}
+
+\newcommand{\psearticlemaketitle}{%
+  \twocolumn[{%
+    \vspace*{\dimexpr\psearticlefirstpagetexttop-\psearticletopmargin-12pt\relax}%
+    \thispagestyle{psearticlefirstpage}%
+    \begin{minipage}[t]{\textwidth}
+      \psearticleheaderblock
+      \vspace{\psearticleheadertotitlesep}
+      {\psetitlefont\PaperTitle\par}
+      \vspace{12pt}
+      {\pseauthorfont\PaperAuthors\par}
+      \vspace{6pt}
+      {\pseaffilfont\PaperAffiliations\par}
+      \vspace{8pt}
+      \pseabstractblock
+      \vspace{12pt}
+    \end{minipage}
+  }]%
+  \thispagestyle{psearticlefirstpage}%
+  \pseactivatearticlebodygeometry
+  \pagestyle{psearticlebody}%
+}
+
+\newcommand{\psereviewmaketitle}{%
+  \thispagestyle{psereview}%
+  {\centering
+    {\psetitlefont\PaperTitle\par}
+    \vspace{12pt}
+    {\pseauthorfont\PaperAuthors\par}
+    \vspace{8pt}
+    {\pseaffilfont\PaperAffiliations\par}
+    \par
+  }%
+  \vspace{14pt}
+  \psereviewstartlinenumbers
+  \pseabstractblock
+  \vspace{12pt}
+}
+
+\newcommand{\psemaketitle}{%
+  \ifpsereviewmode
+    \psereviewmaketitle
+  \else
+    \psearticlemaketitle
+  \fi
+}
+
+\newenvironment{psedefinition}[1]{%
+  \par\vspace{6pt}%
+  {\noindent\bfseries\fontsize{10}{11}\selectfont #1\par}%
+  \vspace{2pt}%
+  \begin{list}{}{\leftmargin=0.425cm\rightmargin=0.425cm}%
+    \item\relax\color{PSEBlue}\justifying
+}{%
+  \end{list}%
+}
+
+\newcommand{\psecopyright}[1]{%
+  \par
+  \begin{samepage}
+    \vspace{6pt}%
+    \noindent\hrule height 0.5pt\relax
+    \vspace{4pt}%
+    {\psecopyrightfont\justifying #1\par}%
+    \vspace{4pt}%
+    {\noindent\includegraphics[width=2.43cm]{cc-by-sa.png}\par}%
+  \end{samepage}
+}
+
+\newcommand{\pseprintcopyright}{%
+  \ifpsereviewmode
+    \relax
+  \else
+    \psecopyright{\PaperCopyrightText}%
+  \fi
+}
+
+\newcommand{\pseprintreferences}{%
+  \ifpsereviewmode\else\balance\fi
+  \section{References}
+  \printbibliography[heading=none]
+}
+
+\AtBeginDocument{%
+  \ifpsereviewmode
+    \pagestyle{psereview}%
+    \onehalfspacing
+    \raggedbottom
+  \else
+    \pagestyle{psearticlebody}%
+  \fi
+}

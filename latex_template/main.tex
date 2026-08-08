@@ -1,0 +1,196 @@
+%\documentclass[10pt,letterpaper]{preprint}
+\documentclass[10pt,letterpaper]{article}
+
+\usepackage{psepress}
+\addbibresource{refs.bib}
+
+% Change `preprint` above back to `article` to build the final two-column version.
+% Edit this metadata block when starting a new paper.
+\renewcommand{\PaperTitle}{Place Your Paper Title Here with Title Capitalization that May Run Multiple Lines}
+\renewcommand{\PaperAuthors}{%
+Firstname Q.~Lastname\textsuperscript{a},
+Givenname R.~S.~Surname Jr.\textsuperscript{ab},
+and Personwith MULTIWORD LASTNAME\textsuperscript{b*}}
+\renewcommand{\PaperAffiliations}{%
+\textsuperscript{a} Provincial University, Department of Chemical Engineering, City, Province, Country\\
+\textsuperscript{b} State College, Engineering Department, City, State, Country\\
+\textsuperscript{*} Corresponding Author: \href{mailto:author.email@someuniversity.ca}{author.email@someuniversity.ca}}
+\renewcommand{\PaperAbstract}{%
+Type your abstract text here. Please limit to 250 words. This block is already formatted with the
+correct abstract styling for the template.
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore
+et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut
+aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse
+cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa
+qui officia deserunt mollit anim id est laborum.}
+\renewcommand{\PaperKeywords}{%
+Choose an item., Choose an item., Choose an item., Choose an item., Choose an item. additional
+keywords separated by commas}
+\renewcommand{\PaperCopyrightText}{%
+\textcopyright\ 2027 by the authors. Licensed to PSEcommunity.org and PSE Press. This is an open
+access article under the creative commons CC-BY-SA licensing terms. Credit must be given to creator
+and adaptations must be shared under the same terms. See
+\url{https://creativecommons.org/licenses/by-sa/4.0/}.}
+
+\renewcommand{\HeaderArticleType}{Original Research Article}
+\renewcommand{\HeaderReviewType}{Peer Reviewed Conference Proceeding}
+% Conference selector. Built-in choices are:
+%   escape-37-2027, pse-2027, and focapo-cpc-2027.
+\PSESelectConference{escape-37-2027}
+% For another conference, replace the selector above with, for example:
+% \PSESetConference{Conference Name}{City, Country, 6-9 June 2027}
+\renewcommand{\FooterJournalInfo}{Syst Control Trans V:XXXX-YYYY (2027)}
+\renewcommand{\FirstPageFooterID}{[DOI\_DoNotChange]}
+\renewcommand{\BodyPageFooterID}{[LAPSE\_DoNotChange]}
+
+\begin{document}
+\psemaketitle
+
+\section{this is header 1}
+\subsection{This is Header 2}
+Regular text is already formatted for the body style used by this template. Do not add blank lines
+between paragraphs for visual spacing. Paragraphs indent automatically and will hyphenate
+automatically.
+
+\subsubsection{This is header 3}
+Use the provided sectioning commands for headings. The spacing before and after headings is already
+set, so do not add extra blank paragraph space manually.
+
+\paragraph{This is header 4}
+Some text that follows header 4.
+
+\section{Figures and Tables in the text}
+\subsection{One Column-Width Figures}
+The standard column width is 8.5 cm in the final article layout. In review mode, \texttt{\string\columnwidth}
+expands to the full single-column text width automatically. For a normal figure, use a
+\texttt{figure} environment and keep the graphic at or below \texttt{\string\columnwidth}. The
+example below uses \texttt{[htp!]} placement so the sample stays near the surrounding explanatory
+text while still allowing normal float behavior.
+
+\begin{figure}[htp!]
+  \centering
+  \includegraphics[width=\columnwidth]{one-column-figure.png}
+  \caption{Example 1-column figure with a short caption. \textit{Max width} is 8.5 cm in the final article layout.}
+\end{figure}
+
+\subsection{One-Column Tables}
+Use a \texttt{table} environment for one-column tables. The sample below also uses \texttt{[htp!]}
+so it stays near the nearby text without forcing exact placement.
+
+\begin{table}[htp!]
+  \caption{Caption for the table. Multi-line table captions will be fully justified.}
+  \centering
+  \renewcommand{\arraystretch}{1.08}
+  \begin{tabularx}{\columnwidth}{@{} l X r @{}}
+    \toprule
+    \textbf{Stream} & \textbf{Description} & \textbf{Flow} \\
+    \midrule
+    Feed & MeOH/EtOH/BuOH blend & 11.25 kmol/hr \\
+    Side Draw & Ethanol-rich cut & 115.00 kmol/hr \\
+    Distillate & Methanol-rich overhead & 21.50 kmol/hr \\
+    Bottoms & Butanol-rich bottoms & 110.00 kmol/hr \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Two Column (Page-Width) Tables and Figures}
+The printable page width is 17.5 cm, but images and tables should be limited to 17 cm wide in the
+final article layout. In LaTeX, use \texttt{figure*} or \texttt{table*} only when the content truly
+needs both columns. In the review build there is only one column, so \texttt{figure} and
+\texttt{table} should be preferred.
+
+\section{How to CITE REFERENCES IN THE TEXT}
+Text citations should use numbers in square brackets [1] and be placed at the end of the phrase that
+is most appropriate in the context of the sentence, which may or may not be at the end of the
+sentence. In this template, bibliography data lives in \texttt{refs.bib} and citations use
+\texttt{\string\cite\{key\}}. You can cite ranges of papers [1-5] or sets of papers [3,5,8].
+
+\section{Other Formatting instructions}
+\subsection{Equations in the Text}
+Equations should look like the following. Use standard displayed equations and let LaTeX align the
+equation numbers flush right. Do not add additional space above or below the equation; the
+environment handles that automatically.
+
+\begin{equation}
+  f_x = \mu \int_0^\infty \frac{1}{x}\,dx
+\end{equation}
+
+\begin{equation}
+  f_x = \alpha\beta \int_0^\infty \frac{1}{x}\,dx + y^2
+\end{equation}
+
+You can use LaTeX math directly here. Here is an example of a matrix:
+
+\begin{equation}
+  A =
+  \left\{
+  \begin{matrix}
+    a & b & c \\
+    d & e & f \\
+    g & h & j
+  \end{matrix}
+  \right\}
+\end{equation}
+
+\subsection{Code}
+Use \texttt{\string\texttt\{\}} for short inline code such as a function name. For code blocks, use
+a monospace environment as demonstrated below.
+
+\begin{lstlisting}[style=psecode]
+for i in range(NPoints):
+    T.append(600 + (400) * (i/(NPoints-1)))
+    P.append(  2 +  (50) * (i/(NPoints-1)))
+
+random.shuffle(P)
+\end{lstlisting}
+
+\subsection{Language and Spelling}
+We prefer US English. Other forms are acceptable.
+
+\subsection{Headers, Footers, and Copyright}
+Do not change the package-provided page geometry, header/footer settings, or the closing copyright
+block in the final article layout. The review build removes the branded conference header and uses a
+plain one-column preprint layout automatically.
+
+\subsection{Definitions, Theorems, and Block Quotes}
+Use the \texttt{psedefinition} environment included in this template for theorem-like statements,
+definitions, and block quotations. Give it a short title such as ``Theorem 1'' or ``Definition'' as
+its argument.
+
+\begin{psedefinition}{Theorem 1}
+Then this text is where your theorem is declared, and you can describe it across multiple lines.
+\end{psedefinition}
+
+\begin{psedefinition}{Term Being Defined}
+This works well for definitions too.
+\end{psedefinition}
+
+\section{DIGITAL supplementary material}
+You are encouraged to submit digital supplementary materials to the Living Archive for Process
+Systems Engineering at \url{http://PSEcommunity.org/LAPSE}. You can then refer to your digital
+materials by using the LAPSE ID in this section. Delete this section if not used.
+
+\section{ACKNOWLEDGEMENTS}
+Please acknowledge your funders in this section, with grant or funding numbers as appropriate. Note
+that most funding agencies require this.
+
+\section{DELCARATION OF USE OF AI}
+Describe how generative AI was used in preparing the manuscript. If AI was used in the research
+methods, describe that in the main paper instead (for example, in the methods section). AI is not an
+author.
+
+\section{author identifiers}
+Author ORCIDs:
+
+Lastname FQ: 0000-0001-2345-6789
+
+Surname GRS Jr: 0000-0001-2345-6789
+
+Multiword Lastname P: 0000-0001-2345-6789
+
+% Remove \nocite{*} once you want the bibliography to include only cited entries.
+\nocite{*}
+\pseprintreferences
+\pseprintcopyright
+
+\end{document}
