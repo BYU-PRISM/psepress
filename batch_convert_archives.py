@@ -9,6 +9,14 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from conference_templates import (
+    CONFERENCE_PRESETS,
+    CUSTOM_CONFERENCE_KEY,
+    DEFAULT_CONFERENCE_KEY,
+    LATEX_CONFERENCE_KEY,
+    ConferenceInfo,
+    resolve_conference_selection,
+)
 from latex_to_word import DocxTemplateConverter
 
 
@@ -50,6 +58,21 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Overwrite existing DOCX outputs if they already exist.",
+    )
+    parser.add_argument(
+        "--conference",
+        choices=[*CONFERENCE_PRESETS, LATEX_CONFERENCE_KEY, CUSTOM_CONFERENCE_KEY],
+        default=DEFAULT_CONFERENCE_KEY,
+        help=(
+            "Conference header preset for every archive. Use 'latex' to read each manuscript or "
+            "'custom' with --conference-name and --conference-location."
+        ),
+    )
+    parser.add_argument("--conference-name", default="", help="Custom conference name.")
+    parser.add_argument(
+        "--conference-location",
+        default="",
+        help="Custom conference location and dates, as they should appear in the Word header.",
     )
     return parser.parse_args()
 
@@ -101,7 +124,13 @@ def safe_extract_archive(archive_bytes: bytes, destination: Path) -> None:
                 sink.write(source.read())
 
 
-def convert_archive(archive_path: Path, template_path: Path, output_path: Path, temp_root: Path) -> ConversionResult:
+def convert_archive(
+    archive_path: Path,
+    template_path: Path,
+    output_path: Path,
+    temp_root: Path,
+    conference: ConferenceInfo | None = CONFERENCE_PRESETS[DEFAULT_CONFERENCE_KEY],
+) -> ConversionResult:
     archive_bytes = archive_path.read_bytes()
     try:
         tex_members = visible_tex_members(archive_bytes)
@@ -132,6 +161,7 @@ def convert_archive(archive_path: Path, template_path: Path, output_path: Path, 
             template_path=template_path,
             tex_path=tex_path,
             output_path=output_path,
+            conference=conference,
         ).convert()
     except Exception as exc:  # noqa: BLE001
         return ConversionResult(
@@ -180,6 +210,14 @@ def main() -> None:
     report_path = Path(args.report).resolve() if args.report else output_dir / "conversion-report.csv"
     temp_root = output_dir / ".psepress_tmp"
 
+    if args.conference != CUSTOM_CONFERENCE_KEY and (args.conference_name or args.conference_location):
+        raise ValueError("--conference-name and --conference-location may only be used with --conference custom.")
+    conference = resolve_conference_selection(
+        args.conference,
+        custom_name=args.conference_name,
+        custom_location=args.conference_location,
+    )
+
     if not input_dir.is_dir():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
     if not template_path.is_file():
@@ -206,7 +244,7 @@ def main() -> None:
                 error="Output already exists. Use --overwrite to replace it.",
             )
         else:
-            result = convert_archive(archive_path, template_path, output_path, temp_root)
+            result = convert_archive(archive_path, template_path, output_path, temp_root, conference)
         results.append(result)
         if result.status == "ok":
             print(f"  ok -> {output_path.name} ({result.selected_tex})")

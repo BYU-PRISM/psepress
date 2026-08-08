@@ -8,6 +8,9 @@ param(
     [string]$Template = "",
     [string]$Pattern = "*.zip",
     [string]$Report = "",
+    [string]$Conference = "escape-37-2027",
+    [string]$ConferenceName = "",
+    [string]$ConferenceLocation = "",
     [switch]$Overwrite
 )
 
@@ -22,11 +25,20 @@ $pythonArgs = @(
     "--input-dir", $InputDir,
     "--output-dir", $OutputDir,
     "--template", $Template,
-    "--pattern", $Pattern
+    "--pattern", $Pattern,
+    "--conference", $Conference
 )
 
 if ($Report) {
     $pythonArgs += @("--report", $Report)
+}
+
+if ($ConferenceName) {
+    $pythonArgs += @("--conference-name", $ConferenceName)
+}
+
+if ($ConferenceLocation) {
+    $pythonArgs += @("--conference-location", $ConferenceLocation)
 }
 
 if ($Overwrite) {

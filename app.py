@@ -8,11 +8,25 @@ from pathlib import Path, PurePosixPath
 
 import streamlit as st
 
+from conference_templates import (
+    CONFERENCE_PRESETS,
+    CUSTOM_CONFERENCE_KEY,
+    DEFAULT_CONFERENCE_KEY,
+    LATEX_CONFERENCE_KEY,
+    ConferenceInfo,
+    conference_from_form,
+    generate_latex_template_archive,
+    generate_template_filenames,
+    generate_word_template,
+    latex_escape_text,
+    resolve_conference_selection,
+)
 from latex_to_word import DocxTemplateConverter
 
 
 APP_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = APP_DIR / "template.docx"
+LATEX_TEMPLATE_ZIP_PATH = APP_DIR / "latex_template" / "latex_template.zip"
 KEYWORDS_PATH = APP_DIR / "PSEkeywords.txt"
 SCT_LOGO_PATH = APP_DIR / "systems-control-transactions.png"
 PSE_PRESS_LOGO_PATH = APP_DIR / "pse-press.png"
@@ -32,20 +46,6 @@ def _load_approved_keywords() -> list[str]:
             seen.add(part)
             keywords.append(part)
     return keywords
-
-
-def _latex_escape_text(value: str) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-    }
-    return "".join(replacements.get(ch, ch) for ch in value)
 
 
 def _parse_keyword_text(value: str) -> list[str]:
@@ -73,7 +73,7 @@ def _merge_keywords(*groups: list[str]) -> list[str]:
 
 
 def _override_keywords_in_tex(tex_path: Path, selected_keywords: list[str]) -> None:
-    keyword_text = ", ".join(_latex_escape_text(keyword) for keyword in selected_keywords)
+    keyword_text = ", ".join(latex_escape_text(keyword) for keyword in selected_keywords)
     override = f"\\renewcommand{{\\PaperKeywords}}{{%\n{keyword_text}}}"
     tex_source = tex_path.read_text(encoding="utf-8")
     pattern = re.compile(r"\\(?:re)?newcommand\{\\PaperKeywords\}\{.*?\}", re.DOTALL)
@@ -133,7 +133,20 @@ def _default_tex_choice(options: list[str]) -> str:
     return options[0]
 
 
-def _convert_archive(archive_bytes: bytes, selected_tex: str, selected_keywords: list[str] | None = None) -> tuple[bytes, str]:
+def _conference_option_label(selection: str) -> str:
+    if selection == CUSTOM_CONFERENCE_KEY:
+        return "Custom conference"
+    if selection == LATEX_CONFERENCE_KEY:
+        return "Use conference from LaTeX"
+    return CONFERENCE_PRESETS[selection].name
+
+
+def _convert_archive(
+    archive_bytes: bytes,
+    selected_tex: str,
+    selected_keywords: list[str] | None = None,
+    conference: ConferenceInfo | None = CONFERENCE_PRESETS[DEFAULT_CONFERENCE_KEY],
+) -> tuple[bytes, str]:
     with tempfile.TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         extract_root = temp_dir / "latex_project"
@@ -153,6 +166,7 @@ def _convert_archive(archive_bytes: bytes, selected_tex: str, selected_keywords:
             template_path=TEMPLATE_PATH,
             tex_path=tex_path,
             output_path=output_path,
+            conference=conference,
         ).convert()
 
         return output_path.read_bytes(), output_name
@@ -232,9 +246,9 @@ def _render_hero() -> None:
             st.image(str(SCT_LOGO_PATH), width="stretch")
     with col_body:
         st.markdown('<div class="pse-hero-kicker">PSE Press Workflow</div>', unsafe_allow_html=True)
-        st.markdown('<div class="pse-hero-title">LaTeX to Word Converter</div>', unsafe_allow_html=True)
+        st.markdown('<div class="pse-hero-title">Conference Templates &amp; LaTeX to Word</div>', unsafe_allow_html=True)
         st.markdown(
-            '<p class="pse-hero-copy">Upload a LaTeX project archive and generate a Word manuscript that preserves the PSE Press template structure while rebuilding the editable content sections.</p>',
+            '<p class="pse-hero-copy">Generate conference-specific Word and LaTeX templates, or convert a LaTeX project archive into a Word manuscript while preserving the PSE Press structure.</p>',
             unsafe_allow_html=True,
         )
     with col_right:
@@ -244,12 +258,101 @@ def _render_hero() -> None:
 
 
 st.set_page_config(
-    page_title="LaTeX to Word Converter",
+    page_title="PSE Press Templates and Converter",
     page_icon="📄",
     layout="centered",
 )
 
 _render_hero()
+
+if not TEMPLATE_PATH.is_file():
+    st.error(f"Missing bundled Word template: {TEMPLATE_PATH}")
+    st.stop()
+if not LATEX_TEMPLATE_ZIP_PATH.is_file():
+    st.error(f"Missing bundled LaTeX template: {LATEX_TEMPLATE_ZIP_PATH}")
+    st.stop()
+
+st.subheader("Generate Conference Templates")
+st.caption(
+    "Enter the conference header information once, then download both a Word template and a complete LaTeX project."
+)
+
+with st.form("conference_template_generator"):
+    generator_name = st.text_input(
+        "Conference name",
+        value="",
+        placeholder="Example: ESCAPE 37 - European Symposium on Computer Aided Process Engineering",
+    )
+    location_left, location_middle, location_right = st.columns([1.15, 1.0, 1.0])
+    with location_left:
+        generator_city = st.text_input("City", value="", placeholder="Trondheim")
+    with location_middle:
+        generator_region = st.text_input("State or region (optional)", value="", placeholder="Trøndelag")
+    with location_right:
+        generator_country = st.text_input("Country", value="", placeholder="Norway")
+    date_left, date_right = st.columns(2)
+    with date_left:
+        generator_start_date = st.date_input("Start date", value=None)
+    with date_right:
+        generator_end_date = st.date_input("End date", value=None)
+    generate_templates = st.form_submit_button("Generate templates", type="primary")
+
+if generate_templates:
+    try:
+        if generator_start_date is None or generator_end_date is None:
+            raise ValueError("Conference start date and end date are required.")
+        generated_conference = conference_from_form(
+            name=generator_name,
+            city=generator_city,
+            region=generator_region,
+            country=generator_country,
+            start_date=generator_start_date,
+            end_date=generator_end_date,
+        )
+        word_name, latex_name = generate_template_filenames(generated_conference)
+        generated_word = generate_word_template(TEMPLATE_PATH.read_bytes(), generated_conference)
+        generated_latex = generate_latex_template_archive(
+            LATEX_TEMPLATE_ZIP_PATH.read_bytes(),
+            generated_conference,
+        )
+    except Exception as exc:
+        st.error(str(exc))
+    else:
+        st.session_state["generated_conference_templates"] = {
+            "conference": generated_conference,
+            "word_name": word_name,
+            "word_bytes": generated_word,
+            "latex_name": latex_name,
+            "latex_bytes": generated_latex,
+        }
+        st.success("Conference templates are ready to download.")
+
+generated_templates = st.session_state.get("generated_conference_templates")
+if generated_templates:
+    st.caption(
+        f"Header: {generated_templates['conference'].name} | "
+        f"{generated_templates['conference'].location}"
+    )
+    word_download, latex_download = st.columns(2)
+    with word_download:
+        st.download_button(
+            "Download Word template",
+            data=generated_templates["word_bytes"],
+            file_name=generated_templates["word_name"],
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
+    with latex_download:
+        st.download_button(
+            "Download LaTeX template",
+            data=generated_templates["latex_bytes"],
+            file_name=generated_templates["latex_name"],
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+st.divider()
+st.subheader("Convert LaTeX to Word")
 
 with st.expander("What to include in the zip", expanded=True):
     st.markdown(
@@ -258,10 +361,6 @@ with st.expander("What to include in the zip", expanded=True):
         "- Any figures or other files referenced by the LaTeX source\n"
         "- Any additional `.tex` files pulled in with `\\input{...}`"
     )
-
-if not TEMPLATE_PATH.is_file():
-    st.error(f"Missing bundled template: {TEMPLATE_PATH}")
-    st.stop()
 
 approved_keywords = _load_approved_keywords()
 
@@ -290,6 +389,30 @@ if uploaded_file is not None:
         index=tex_members.index(_default_tex_choice(tex_members)),
         help="If your archive contains multiple `.tex` files, choose the manuscript entry point.",
     )
+
+    conference_selection = st.selectbox(
+        "Conference",
+        options=[*CONFERENCE_PRESETS, CUSTOM_CONFERENCE_KEY, LATEX_CONFERENCE_KEY],
+        index=0,
+        format_func=_conference_option_label,
+        help=(
+            "Choose a built-in conference, enter custom header text, or use the conference command "
+            "already present in the selected LaTeX manuscript."
+        ),
+    )
+    custom_conference_name = ""
+    custom_conference_location = ""
+    if conference_selection == CUSTOM_CONFERENCE_KEY:
+        custom_conference_name = st.text_input(
+            "Custom conference name",
+            value="",
+            placeholder="Conference name as it should appear in the Word header",
+        )
+        custom_conference_location = st.text_input(
+            "Custom conference location and dates",
+            value="",
+            placeholder="City, Country, 6-9 June 2027",
+        )
 
     keyword_mode = st.radio(
         "Keywords",
@@ -326,12 +449,22 @@ if uploaded_file is not None:
         if keyword_mode == "Set keywords for this conversion" and not final_keywords:
             st.error("Add at least one keyword, or use the manuscript keywords option.")
             st.stop()
+        try:
+            selected_conference = resolve_conference_selection(
+                conference_selection,
+                custom_name=custom_conference_name,
+                custom_location=custom_conference_location,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+            st.stop()
         with st.spinner("Converting the archive to DOCX..."):
             try:
                 output_bytes, output_name = _convert_archive(
                     archive_bytes,
                     selected_tex,
                     final_keywords if keyword_mode == "Set keywords for this conversion" else None,
+                    selected_conference,
                 )
             except Exception as exc:
                 st.error("Conversion failed.")

@@ -11,6 +11,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+from conference_templates import (
+    CONFERENCE_PRESETS,
+    CUSTOM_CONFERENCE_KEY,
+    DEFAULT_CONFERENCE_KEY,
+    LATEX_CONFERENCE_KEY,
+    ConferenceInfo,
+    resolve_conference_selection,
+    update_conference_header_entries,
+    validate_conference,
+)
+
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -194,6 +205,28 @@ def extract_command_body(text: str, command_name: str) -> str | None:
             body, _ = parse_braced(text, pos)
             return body
     return None
+
+
+def extract_command_arguments(text: str, command_name: str, argument_count: int) -> list[tuple[int, list[str]]]:
+    invocations: list[tuple[int, list[str]]] = []
+    pattern = re.compile(r"\\" + re.escape(command_name) + r"\b")
+    for match in pattern.finditer(text):
+        position = match.end()
+        arguments: list[str] = []
+        try:
+            for _ in range(argument_count):
+                while position < len(text) and text[position].isspace():
+                    position += 1
+                if position >= len(text) or text[position] != "{":
+                    raise ValueError
+                argument, position = parse_braced(text, position)
+                arguments.append(argument)
+        except ValueError as exc:
+            raise ValueError(
+                f"\\{command_name} must have {argument_count} braced argument(s)."
+            ) from exc
+        invocations.append((match.start(), arguments))
+    return invocations
 
 
 def strip_comments(text: str) -> str:
@@ -1094,10 +1127,32 @@ class LatexParser:
         self.text = strip_comment_environments(load_latex_source(tex_path))
         self.active_text = strip_comments(self.text)
         self.metadata = {key: extract_command_body(self.active_text, key) or "" for key in self.METADATA_KEYS}
+        self._apply_conference_commands()
         self.document_body = self._resolve_macros(self._extract_document_body())
         self.bib_path = self._extract_bib_path()
         self.active_document_body = strip_comments(strip_comment_environments(self.document_body))
         self.nocite_all = re.search(r"\\nocite\s*\{\s*\*\s*\}", self.active_document_body) is not None
+
+    def _apply_conference_commands(self) -> None:
+        document_start = self.active_text.find("\\begin{document}")
+        preamble = self.active_text if document_start == -1 else self.active_text[:document_start]
+        commands: list[tuple[int, ConferenceInfo]] = []
+        for position, arguments in extract_command_arguments(preamble, "PSESelectConference", 1):
+            key = normalize_space(arguments[0]).lower()
+            try:
+                conference = CONFERENCE_PRESETS[key]
+            except KeyError as exc:
+                choices = ", ".join(CONFERENCE_PRESETS)
+                raise ValueError(
+                    f"Unknown LaTeX conference preset {arguments[0]!r}. Choose one of: {choices}."
+                ) from exc
+            commands.append((position, conference))
+        for position, arguments in extract_command_arguments(preamble, "PSESetConference", 2):
+            commands.append((position, ConferenceInfo(name=arguments[0], location=arguments[1])))
+        if commands:
+            _, conference = max(commands, key=lambda item: item[0])
+            self.metadata["HeaderConference"] = conference.name
+            self.metadata["HeaderLocation"] = conference.location
 
     def _resolve_macros(self, text: str) -> str:
         macros = {}
@@ -1803,6 +1858,31 @@ def unique_media_name_in_set(existing_names: set[str], stem: str, suffix: str) -
     return candidate
 
 
+def raster_image_for_eps(path: Path) -> Path:
+    if path.suffix.lower() != ".eps":
+        return path
+    for suffix in (".png", ".jpg", ".jpeg"):
+        sibling = path.with_suffix(suffix)
+        if sibling.exists():
+            return sibling.resolve()
+    png_path = path.with_suffix(".png")
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ValueError(
+            f"EPS image requires a PNG/JPEG sibling or Pillow/Ghostscript conversion support: {path}"
+        ) from exc
+    try:
+        with Image.open(path) as img:
+            img.load(scale=5)
+            img.save(png_path, "PNG", dpi=(300, 300))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(
+            f"Could not convert EPS image to PNG. Add a PNG/JPEG with the same basename as {path.name}."
+        ) from exc
+    return png_path.resolve()
+
+
 def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
     raw = image_ref.strip()
     candidate = Path(raw)
@@ -1823,13 +1903,7 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
         for path in search_paths:
             if path.exists():
                 if path.suffix.lower() == ".eps":
-                    png_path = path.with_suffix(".png")
-                    if not png_path.exists():
-                        from PIL import Image
-                        with Image.open(path) as img:
-                            img.load(scale=5)
-                            img.save(png_path, "PNG", dpi=(300, 300))
-                    return png_path.resolve()
+                    return raster_image_for_eps(path)
                 return path.resolve()
     else:
         for base in search_paths:
@@ -1837,13 +1911,7 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
                 path = base.with_suffix(ext)
                 if path.exists():
                     if ext == ".eps":
-                        png_path = path.with_suffix(".png")
-                        if not png_path.exists():
-                            from PIL import Image
-                            with Image.open(path) as img:
-                                img.load(scale=5)
-                                img.save(png_path, "PNG", dpi=(300, 300))
-                        return png_path.resolve()
+                        return raster_image_for_eps(path)
                     return path.resolve()
     raise FileNotFoundError(f"Could not resolve image referenced from LaTeX: {image_ref}")
 
@@ -2043,7 +2111,7 @@ class MediaManager:
         self.cache: dict[Path, str] = {}
 
     def add_image(self, source_path: Path) -> str:
-        source_path = source_path.resolve()
+        source_path = raster_image_for_eps(source_path).resolve()
         if source_path in self.cache:
             return self.cache[source_path]
         target_name = unique_media_name_in_set(self.existing_names, source_path.stem, source_path.suffix.lower())
@@ -2062,7 +2130,13 @@ class MediaManager:
 class DocxTemplateConverter:
     HYPERLINK_REL_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
 
-    def __init__(self, template_path: Path, tex_path: Path, output_path: Path):
+    def __init__(
+        self,
+        template_path: Path,
+        tex_path: Path,
+        output_path: Path,
+        conference: ConferenceInfo | None = None,
+    ):
         self.template_path = template_path
         self.tex_path = tex_path
         self.output_path = output_path
@@ -2071,6 +2145,16 @@ class DocxTemplateConverter:
         self.citation_numbers: dict[str, int] = {}
         self.reference_numbers: dict[str, str] = {}
         self.inline = InlineLatexConverter(self.citation_numbers, self.parsed.cited_keys, self.reference_numbers)
+        if conference is None:
+            latex_name = self.inline.to_plain(self.parsed.metadata.get("HeaderConference", ""))
+            latex_location = self.inline.to_plain(self.parsed.metadata.get("HeaderLocation", ""))
+            if not latex_name or not latex_location:
+                raise ValueError(
+                    "The LaTeX manuscript must define both conference header lines with "
+                    "\\PSESelectConference, \\PSESetConference, or the legacy HeaderConference/HeaderLocation macros."
+                )
+            conference = ConferenceInfo(name=latex_name, location=latex_location)
+        self.conference = validate_conference(conference)
         self.max_docpr_id = 100
         self.body_section_break: ET.Element | None = None
         self.final_section: ET.Element | None = None
@@ -2103,6 +2187,7 @@ class DocxTemplateConverter:
         package_entries["word/document.xml"] = serialize_document_xml(doc_tree.getroot())
         package_entries["word/_rels/document.xml.rels"] = serialize_xml(rel_tree.getroot(), default_namespace=REL_NS)
         package_entries["[Content_Types].xml"] = serialize_xml(content_tree.getroot(), default_namespace=CT_NS)
+        update_conference_header_entries(package_entries, self.conference)
         cleanup_docx_package(package_entries)
 
         with zipfile.ZipFile(self.output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -2756,89 +2841,6 @@ class DocxTemplateConverter:
                 col_index += span
         return tbl
 
-    def _update_headers_and_footers(self, package_entries: dict[str, bytes]) -> None:
-        metadata = self.parsed.metadata
-        if "word/header2.xml" in package_entries:
-            tree = ET.ElementTree(ET.fromstring(package_entries["word/header2.xml"]))
-            header = tree.getroot()
-            paragraphs = header.findall("w:p", NS)
-            replacements = [
-                "",
-                metadata.get("HeaderArticleType", ""),
-                metadata.get("HeaderReviewType", ""),
-                metadata.get("HeaderConference", ""),
-                metadata.get("HeaderLocation", ""),
-            ]
-            for idx, text in enumerate(replacements):
-                if idx >= len(paragraphs):
-                    break
-                self._replace_paragraph_text(paragraphs[idx], self.inline.to_plain(text), preserve_drawings=idx in {0, 1})
-            package_entries["word/header2.xml"] = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-
-        self._rewrite_footer(package_entries, "word/footer2.xml", self.inline.to_plain(metadata.get("FirstPageFooterID", "")), self.inline.to_plain(metadata.get("FooterJournalInfo", "")))
-        self._rewrite_footer(package_entries, "word/footer1.xml", self.inline.to_plain(metadata.get("BodyPageFooterID", "")), self.inline.to_plain(metadata.get("FooterJournalInfo", "")))
-
-    def _replace_paragraph_text(self, paragraph: ET.Element, text: str, *, preserve_drawings: bool = False) -> None:
-        pPr = copy.deepcopy(paragraph.find("w:pPr", NS))
-        preserved: list[ET.Element] = []
-        if preserve_drawings:
-            for child in list(paragraph):
-                if child.tag == qn("w", "r") and child.find("w:drawing", NS) is not None:
-                    preserved.append(copy.deepcopy(child))
-        for child in list(paragraph):
-            paragraph.remove(child)
-        if pPr is not None:
-            paragraph.append(pPr)
-        for run in preserved:
-            paragraph.append(run)
-        if text:
-            paragraph.append(self._run(RunSpec(text)))
-
-    def _rewrite_footer(self, package_entries: dict[str, bytes], package_path: str, prefix: str, journal_info: str) -> None:
-        if package_path not in package_entries:
-            return
-        tree = ET.ElementTree(ET.fromstring(package_entries[package_path]))
-        root = tree.getroot()
-        paragraph = root.find("w:p", NS)
-        if paragraph is None:
-            package_entries[package_path] = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-            return
-        pPr = copy.deepcopy(paragraph.find("w:pPr", NS))
-        for child in list(paragraph):
-            paragraph.remove(child)
-        if pPr is not None:
-            paragraph.append(pPr)
-        paragraph.append(self._footer_text_run(f"{prefix} {journal_info} "))
-        paragraph.append(self._footer_field_run("begin"))
-        instr = ET.SubElement(ET.Element(qn("w", "r")), qn("w", "instrText"))
-        instr.set(f"{{{XML_NS}}}space", "preserve")
-        instr.text = " PAGE  \\* Arabic  \\* MERGEFORMAT "
-        paragraph.append(instr.getparent() if hasattr(instr, "getparent") else self._wrap_instr(instr))
-        paragraph.append(self._footer_field_run("separate"))
-        paragraph.append(self._footer_text_run("1"))
-        paragraph.append(self._footer_field_run("end"))
-        package_entries[package_path] = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True)
-
-    def _wrap_instr(self, instr_text: ET.Element) -> ET.Element:
-        run = ET.Element(qn("w", "r"))
-        run.append(instr_text)
-        return run
-
-    def _footer_text_run(self, text: str) -> ET.Element:
-        run = ET.Element(qn("w", "r"))
-        t = ET.SubElement(run, qn("w", "t"))
-        if text.startswith(" ") or text.endswith(" ") or "  " in text:
-            t.set(f"{{{XML_NS}}}space", "preserve")
-        t.text = text
-        return run
-
-    def _footer_field_run(self, field_type: str) -> ET.Element:
-        run = ET.Element(qn("w", "r"))
-        field = ET.SubElement(run, qn("w", "fldChar"))
-        field.set(qn("w", "fldCharType"), field_type)
-        return run
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert the LaTeX manuscript back into a DOCX that reuses template.docx styling."
@@ -2846,6 +2848,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", default="main.tex", help="Path to the LaTeX file. Defaults to main.tex.")
     parser.add_argument("--template", default="template.docx", help="Path to the Word template DOCX.")
     parser.add_argument("--output", default="main-from-latex.docx", help="Path to the generated DOCX.")
+    parser.add_argument(
+        "--conference",
+        choices=[*CONFERENCE_PRESETS, LATEX_CONFERENCE_KEY, CUSTOM_CONFERENCE_KEY],
+        default=DEFAULT_CONFERENCE_KEY,
+        help=(
+            "Conference header preset. Use 'latex' to read conference information from the manuscript "
+            "or 'custom' with --conference-name and --conference-location."
+        ),
+    )
+    parser.add_argument("--conference-name", default="", help="Custom conference name.")
+    parser.add_argument(
+        "--conference-location",
+        default="",
+        help="Custom conference location and dates, as they should appear in the Word header.",
+    )
     return parser.parse_args()
 
 
@@ -2858,7 +2875,19 @@ def main() -> None:
         raise FileNotFoundError(f"LaTeX input not found: {tex_path}")
     if not template_path.is_file():
         raise FileNotFoundError(f"Template DOCX not found: {template_path}")
-    DocxTemplateConverter(template_path=template_path, tex_path=tex_path, output_path=output_path).convert()
+    if args.conference != CUSTOM_CONFERENCE_KEY and (args.conference_name or args.conference_location):
+        raise ValueError("--conference-name and --conference-location may only be used with --conference custom.")
+    conference = resolve_conference_selection(
+        args.conference,
+        custom_name=args.conference_name,
+        custom_location=args.conference_location,
+    )
+    DocxTemplateConverter(
+        template_path=template_path,
+        tex_path=tex_path,
+        output_path=output_path,
+        conference=conference,
+    ).convert()
     print(f"Wrote {output_path}")
 
 

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DEFAULT="${SCRIPT_DIR}/template.docx"
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $(basename "$0") INPUT_DIR OUTPUT_DIR [--template PATH] [--pattern GLOB] [--report PATH] [--overwrite]" >&2
+  echo "Usage: $(basename "$0") INPUT_DIR OUTPUT_DIR [--conference KEY] [--conference-name NAME] [--conference-location TEXT] [--template PATH] [--pattern GLOB] [--report PATH] [--overwrite]" >&2
   exit 1
 fi
 
