@@ -119,7 +119,10 @@
   Extension=.ttf,
   UprightFont=*,
   BoldFont=Inter-Bold,
-  ItalicFont=Inter-Italic
+  ItalicFont=Inter-Italic,
+  % The bundled fonts have no bold italic face; slant the bold face explicitly.
+  BoldItalicFont=Inter-Bold,
+  BoldItalicFeatures={FakeSlant=0.2}
 ]
 \newfontfamily\intermedium{Inter-Medium}[Path=fonts/,Extension=.ttf]
 \setmonofont{CourierNew}[Path=fonts/,Extension=.ttf]

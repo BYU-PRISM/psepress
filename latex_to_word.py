@@ -6,6 +6,7 @@ import posixpath
 import re
 import secrets
 import struct
+import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -338,6 +339,9 @@ LATEX_ACCENT_REPLACEMENTS = {
 
 def decode_latex_text(value: str) -> str:
     value = value.replace("\n", " ")
+    value = re.sub(r"\\([ij])(?![A-Za-z])", r"\1", value)
+    accents = {"'": "\u0301", '"': "\u0308", "`": "\u0300", "^": "\u0302", "~": "\u0303", "=": "\u0304", "c": "\u0327", "v": "\u030c"}
+    value = re.sub(r"\\(['\"`^~=cv])\s*\{?([A-Za-z])\}?", lambda m: unicodedata.normalize("NFC", m[2] + accents[m[1]]), value)
     for latex, replacement in LATEX_ACCENT_REPLACEMENTS.items():
         value = value.replace(latex, replacement)
         value = value.replace("{" + latex + "}", replacement)
@@ -419,6 +423,8 @@ class TableBlock:
     caption: str
     rows: list[list[str]]
     label: str | None = None
+    wide: bool = False
+    font_half_points: int | None = None
 
 
 @dataclass
@@ -576,18 +582,17 @@ def looks_like_protected_corporate_name(value: str) -> bool:
 
 def initials_from_given_names(value: str) -> str:
     value = decode_latex_text(strip_outer_braces(value))
-    letters: list[str] = []
-    for token in re.split(r"[\s\-]+", value):
-        token = token.strip(". ")
-        if not token:
-            continue
-        if len(token) > 1 and token.isupper():
-            letters.extend(token)
-        else:
-            match = re.search(r"[A-Za-z]", token)
-            if match:
-                letters.append(match.group(0).upper())
-    return " ".join(f"{letter}." for letter in letters)
+    groups = []
+    for token in value.split():
+        initials = []
+        for part in token.split("-"):
+            letters = [char for char in part if char.isalpha()]
+            if letters:
+                selected = letters if len(letters) > 1 and "".join(letters).isupper() else letters[:1]
+                initials.append(" ".join(char.upper() + "." for char in selected))
+        if initials:
+            groups.append("-".join(initials))
+    return " ".join(groups)
 
 
 def looks_like_name_suffix(value: str) -> bool:
@@ -597,6 +602,8 @@ def looks_like_name_suffix(value: str) -> bool:
 
 def format_bibtex_name(value: str) -> str:
     value = value.strip()
+    if value == "others":
+        return "et al."
     if looks_like_protected_corporate_name(value):
         return decode_latex_text(strip_outer_braces(value))
 
@@ -635,6 +642,8 @@ def format_bibtex_names(value: str) -> str:
 
 class LatexMathParser:
     GREEK_MAP = {
+        "\\dag": "†",
+        "\\bullet": "•",
         "\\approx": "≈",
         "\\neq": "≠",
         "\\leq": "≤",
@@ -1156,16 +1165,45 @@ class LatexParser:
 
     def _resolve_macros(self, text: str) -> str:
         macros = {}
-        for match in re.finditer(r"\\(?:re)?newcommand\{\\([a-zA-Z]+)\}", self.active_text):
-            macro_name = match.group(1)
-            if macro_name not in self.METADATA_KEYS:
-                body = extract_command_body(self.active_text, macro_name)
-                if body is not None:
-                    macros[macro_name] = body
-        for name, body in macros.items():
-            text = re.sub(r"\\" + name + r"\{\}", body, text)
-            text = re.sub(r"\\" + name + r"\b", body, text)
-        return text
+        preamble = self.active_text.split(r"\begin{document}", 1)[0]
+        pattern = r"\\(?:re)?newcommand\s*\{\\([a-zA-Z]+)\}\s*(?:\[(\d)\])?\s*"
+        for match in re.finditer(pattern, preamble):
+            name = match.group(1)
+            if name in self.METADATA_KEYS:
+                continue
+            if match.end() < len(preamble) and preamble[match.end()] == "{":
+                body, _ = parse_braced(preamble, match.end())
+                macros[name] = (int(match.group(2) or 0), body)
+        # Use literal replacements: TeX backslashes are not regex replacements.
+        for _ in range(20):
+            previous = text
+            for name, (count, body) in macros.items():
+                def expand(match):
+                    pos = match.end()
+                    arguments = []
+                    for _ in range(count):
+                        while pos < len(text) and text[pos].isspace():
+                            pos += 1
+                        if pos >= len(text) or text[pos] != "{":
+                            raise ValueError(f"Macro \\{name} requires {count} braced arguments.")
+                        argument, pos = parse_braced(text, pos)
+                        arguments.append(argument)
+                    replacement = re.sub(r"#([1-9])", lambda m: arguments[int(m[1])-1], body) if count else body
+                    return match.start(), pos, replacement
+                changes = []
+                consumed = 0
+                for match in re.finditer(r"\\" + name + r"(?![a-zA-Z])", text):
+                    if match.start() >= consumed:
+                        change = expand(match)
+                        changes.append(change)
+                        consumed = change[1]
+                for start, end, replacement in reversed(changes):
+                    text = text[:start] + replacement + text[end:]
+            if text == previous:
+                if any(re.search(r"\\" + name + r"(?![a-zA-Z])", text) for name in macros):
+                    raise ValueError("Recursive macro definition.")
+                return text
+        raise ValueError("Macro expansion exceeded 20 passes (possibly recursive definitions).")
 
     def _extract_document_body(self) -> str:
         start = self.active_text.find("\\begin{document}")
@@ -1188,6 +1226,9 @@ class LatexParser:
         while i < len(lines):
             line = lines[i].strip()
             if not line:
+                i += 1
+                continue
+            if re.fullmatch(r"\\label\{[^}]*\}", line):
                 i += 1
                 continue
             if line in {"\\psemaketitle", "\\balance"} or line.startswith("\\nocite"):
@@ -1273,13 +1314,13 @@ class LatexParser:
                     image_path = path_match.group(1).strip()
                 opt = re.search(r"\[([^\]]+)\]", line)
                 if opt:
-                    widthhint = opt.group(1)
+                    width_hint = opt.group(1)
             elif line.startswith("\\caption"):
                 caption, _ = parse_braced(line, len("\\caption"))
             elif line.startswith("\\end{figure"):
                 body_text = " ".join(lines[start:i+1])
                 _, label = extract_label(body_text)
-                return FigureBlock(path=image_path, caption=caption, wide=wide, width_hint=widthhint, label=label), i + 1
+                return FigureBlock(path=image_path, caption=caption, wide=wide, width_hint=width_hint, label=label), i + 1
             i += 1
         raise ValueError("Unclosed figure environment.")
 
@@ -1300,9 +1341,9 @@ class LatexParser:
             elif line.startswith("\\end{table"):
                 body_text = " ".join(lines[start:i+1])
                 _, label = extract_label(body_text)
-                return TableBlock(caption=caption, rows=rows, label=label), i + 1
+                return TableBlock(caption=caption, rows=rows, label=label, wide="table*" in lines[start], font_half_points=16 if r"\footnotesize" in body_text else None), i + 1
             elif in_tabular:
-                if line in {"\\toprule", "\\midrule", "\\bottomrule"} or not line:
+                if re.fullmatch(r"\\(?:toprule|midrule|bottomrule|addlinespace)(?:\[[^]]*\])?", line) or not line:
                     i += 1
                     continue
                 pending = f"{pending} {line}".strip()
@@ -1504,6 +1545,8 @@ class InlineLatexConverter:
                 ref_text = self.reference_numbers.get(key, f"ref{{{key}}}")
                 if text.startswith("\\autoref", i) and ref_text.isdigit():
                     ref_text = f"Eq. {ref_text}"
+                if text.startswith("\\ref", i):
+                    ref_text = re.sub(r"^(?:Table|Fig\.)\s+", "", ref_text)
                 self._append_run(runs, ref_text)
                 i = pos
                 continue
@@ -1518,6 +1561,19 @@ class InlineLatexConverter:
                 url_text = self.to_plain(url)
                 self._append_run(runs, url_text, hyperlink=url_text)
                 i = pos
+                continue
+            if text.startswith("\\rotatebox", i):
+                pos = i + len("\\rotatebox")
+                if text[pos:pos+1] == "[":
+                    pos = text.index("]", pos) + 1
+                _, pos = parse_braced(text, pos)
+                content, pos = parse_braced(text, pos)
+                self._append_styled_runs(runs, self.to_runs(content))
+                i = pos
+                continue
+            if text.startswith("\\dag", i) and self._command_boundary(text, i + 4):
+                self._append_run(runs, "†")
+                i += 4
                 continue
             if text.startswith("\\textsuperscript", i):
                 inner, pos = parse_braced(text, i + len("\\textsuperscript"))
@@ -1665,7 +1721,7 @@ class InlineLatexConverter:
     ) -> None:
         if not text:
             return
-        if runs and (runs[-1].superscript, runs[-1].hyperlink, runs[-1].bold, runs[-1].italic) == (superscript, hyperlink, bold, italic):
+        if runs and runs[-1].math_node is None and (runs[-1].superscript, runs[-1].hyperlink, runs[-1].bold, runs[-1].italic) == (superscript, hyperlink, bold, italic):
             runs[-1].text += text
         else:
             runs.append(RunSpec(text=text, superscript=superscript, hyperlink=hyperlink, bold=bold, italic=italic))
@@ -1681,7 +1737,7 @@ class InlineLatexConverter:
                 continue
             if normalized and normalized[-1].text.endswith(" ") and text.startswith(" "):
                 text = text.lstrip()
-            if normalized and (normalized[-1].superscript, normalized[-1].hyperlink, normalized[-1].bold, normalized[-1].italic) == (
+            if normalized and normalized[-1].math_node is None and (normalized[-1].superscript, normalized[-1].hyperlink, normalized[-1].bold, normalized[-1].italic) == (
                 run.superscript,
                 run.hyperlink,
                 run.bold,
@@ -1916,12 +1972,18 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
     raise FileNotFoundError(f"Could not resolve image referenced from LaTeX: {image_ref}")
 
 
-def compute_column_widths(rows: list[list[str]], col_count: int) -> list[int]:
-    total_width = 4820
+def compute_column_widths(rows: list[list[str]], col_count: int, total_width: int = 4820) -> list[int]:
+    if col_count < 1 or total_width < col_count:
+        raise ValueError("Table width must accommodate every column.")
     scores = [1] * col_count
-    for idx in range(col_count):
-        scores[idx] = max(1, max((len(normalize_space(row[idx])) for row in rows if idx < len(row)), default=1))
-    widths = [max(800, int(total_width * score / sum(scores))) for score in scores]
+    for row in rows:
+        if any(cell.startswith("__MULTICOLUMN:") for cell in row):
+            continue
+        for index, cell in enumerate(row[:col_count]):
+            scores[index] = max(scores[index], len(InlineLatexConverter({}, []).to_plain(cell).strip()))
+    minimum = min(400, total_width // col_count)
+    available = total_width - minimum * col_count
+    widths = [minimum + int(available * score / sum(scores)) for score in scores]
     widths[-1] += total_width - sum(widths)
     return widths
 
@@ -2188,6 +2250,28 @@ class DocxTemplateConverter:
         package_entries["word/_rels/document.xml.rels"] = serialize_xml(rel_tree.getroot(), default_namespace=REL_NS)
         package_entries["[Content_Types].xml"] = serialize_xml(content_tree.getroot(), default_namespace=CT_NS)
         update_conference_header_entries(package_entries, self.conference)
+        for name, data in list(package_entries.items()):
+            if not (name.startswith("word/header") and name.endswith(".xml")):
+                continue
+            root = ET.fromstring(data)
+            for paragraph in root.findall(".//w:p", NS):
+                text = "".join(node.text or "" for node in paragraph.findall(".//w:t", NS))
+                if text.strip() == "[Remaining Page s]":
+                    for node in paragraph.findall(".//w:t", NS):
+                        node.text = ""
+                if text.strip() in {"Original Research Article", "Peer Reviewed Conference Proceeding"}:
+                    for run in paragraph.findall("w:r", NS):
+                        for tab in run.findall("w:tab", NS):
+                            run.remove(tab)
+                    props = paragraph.find("w:pPr", NS)
+                    if props is None:
+                        props = ET.SubElement(paragraph, qn("w", "pPr"))
+                    for tag, attribute, value in [("jc", "val", "right"), ("ind", "right", "900")]:
+                        node = props.find(qn("w", tag))
+                        if node is None:
+                            node = ET.SubElement(props, qn("w", tag))
+                        node.set(qn("w", attribute), value)
+            package_entries[name] = serialize_xml(root)
         cleanup_docx_package(package_entries)
 
         with zipfile.ZipFile(self.output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -2294,8 +2378,26 @@ class DocxTemplateConverter:
                 table_index += 1
                 caption_runs = [RunSpec(f"Table {table_index}: ", bold=True)]
                 caption_runs.extend(self.inline.to_runs(block.caption.lstrip()))
-                body.append(self._paragraph("PSETableCaption", caption_runs))
-                body.append(self._table_element(block.rows))
+                if block.wide:
+                    body.append(self._table_section_break(2))
+                caption = self._paragraph("PSETableCaption", caption_runs)
+                props = caption.find(qn("w", "pPr"))
+                ET.SubElement(props, qn("w", "keepNext"))
+                ET.SubElement(props, qn("w", "keepLines"))
+                table = self._table_element(block.rows, block.wide)
+                if block.font_half_points is not None:
+                    for element in (caption, table):
+                        for run in element.findall(".//w:r", NS):
+                            props = run.find(qn("w", "rPr"))
+                            if props is None:
+                                props = ET.Element(qn("w", "rPr"))
+                                run.insert(0, props)
+                            size = ET.SubElement(props, qn("w", "sz"))
+                            size.set(qn("w", "val"), str(block.font_half_points))
+                body.append(caption)
+                body.append(table)
+                if block.wide:
+                    body.append(self._table_section_break(1))
             elif isinstance(block, EquationBlock):
                 equation_index += 1
                 body.append(self._equation_paragraph(block.text, equation_index))
@@ -2362,6 +2464,27 @@ class DocxTemplateConverter:
         return line[: plain_email.start()] + replacement + suffix
 
     def _format_bib_entry(self, entry: BibEntry) -> str:
+        result = self._format_bib_entry_base(entry)
+        fields = entry.fields
+        for name in ("doi", "url", "eprint", "note", "location", "address"):
+            value = clean_bib_value(fields.get(name, ""))
+            if not value or value in result:
+                continue
+            if name == "url" and fields.get("doi"):
+                continue
+            if name == "doi":
+                value = "\\url{https://doi.org/" + value + "}"
+            elif name == "url":
+                value = "\\url{" + value + "}"
+            elif name == "eprint":
+                value = clean_bib_value(fields.get("eprinttype", fields.get("archiveprefix", "eprint"))) + ": " + value
+                subject = clean_bib_value(fields.get("eprintclass", fields.get("primaryclass", "")))
+                if subject:
+                    value += " [" + subject + "]"
+            result += " " + value
+        return result.replace("?.", "?").replace("!.", "!")
+
+    def _format_bib_entry_base(self, entry: BibEntry) -> str:
         fields = entry.fields
         authors = format_bibtex_names(fields.get("author", ""))
         title = clean_bib_value(fields.get("title", ""))
@@ -2398,14 +2521,15 @@ class DocxTemplateConverter:
             )
             isbn = clean_bib_value(fields.get("isbn", ""))
             return normalize_space(f"{base} ISBN {isbn}") if isbn else normalize_space(base)
-        if entry.entry_type in {"incollection", "inbook"}:
+        if entry.entry_type in {"incollection", "inbook", "inproceedings", "conference"}:
             editors = format_bibtex_names(fields.get("editor", ""))
             pages = clean_bib_value(fields.get("pages", ""))
             pages_text = f":{pages}" if pages else ""
             publisher = clean_bib_value(fields.get("publisher", ""))
+            editor_text = f" Ed: {editors}." if editors else ""
             return (
                 f"{authors}. {title}. In: "
-                f"{clean_bib_value(fields.get('booktitle', ''))}. Ed: {editors}. "
+                f"{clean_bib_value(fields.get('booktitle', ''))}.{editor_text} "
                 f"{publisher}{pages_text} ({year}).{doi_text}"
             )
         if entry.entry_type == "online":
@@ -2596,7 +2720,9 @@ class DocxTemplateConverter:
         pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
         pStyle.set(qn("w", "val"), style_id)
         for run in runs:
-            if run.hyperlink:
+            if run.math_node is not None:
+                self._build_math_node(ET.SubElement(p, qn("m", "oMath")), run.math_node)
+            elif run.hyperlink:
                 hyperlink = ET.SubElement(p, qn("w", "hyperlink"))
                 hyperlink.set(qn("r", "id"), self._hyperlink_rel(run.hyperlink))
                 hyperlink.append(self._run(run))
@@ -2608,7 +2734,7 @@ class DocxTemplateConverter:
         p = ET.Element(qn("w", "p"))
         pPr = ET.SubElement(p, qn("w", "pPr"))
         pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
-        pStyle.set(qn("w", "val"), "PSEParagraph")
+        pStyle.set(qn("w", "val"), "PSEText")
         runs = self.inline.to_runs(block.text)
         for run_spec in runs:
             if run_spec.math_node is not None:
@@ -2767,20 +2893,56 @@ class DocxTemplateConverter:
             if edit_attr in node.attrib:
                 node.set(edit_attr, secrets.token_hex(4).upper())
 
-    def _table_element(self, rows: list[list[str]]) -> ET.Element:
+    def _table_section_break(self, columns: int) -> ET.Element:
+        paragraph = ET.Element(qn("w", "p"))
+        props = ET.SubElement(paragraph, qn("w", "pPr"))
+        section = copy.deepcopy(self.final_section)
+        for tag in ("type", "cols"):
+            node = section.find(qn("w", tag))
+            if node is None:
+                node = ET.SubElement(section, qn("w", tag))
+            node.set(qn("w", "val" if tag == "type" else "num"), "continuous" if tag == "type" else str(columns))
+        title_page = section.find(qn("w", "titlePg"))
+        if title_page is not None:
+            section.remove(title_page)
+        props.append(section)
+        return paragraph
+
+    def _table_element(self, rows: list[list[str]], wide: bool = False) -> ET.Element:
         tbl = ET.Element(qn("w", "tbl"))
         tblPr = copy.deepcopy(self.sample_table_pr) if self.sample_table_pr is not None else ET.Element(qn("w", "tblPr"))
+        floating = tblPr.find(qn("w", "tblpPr"))
+        if floating is not None:
+            tblPr.remove(floating)
+        margins = tblPr.find(qn("w", "tblCellMar"))
+        if margins is None:
+            margins = ET.SubElement(tblPr, qn("w", "tblCellMar"))
+        for side in ("left", "right"):
+            node = margins.find(qn("w", side))
+            if node is None:
+                node = ET.SubElement(margins, qn("w", side))
+            node.set(qn("w", "w"), "40")
+            node.set(qn("w", "type"), "dxa")
         tbl.append(tblPr)
-        column_count = max((len(row) for row in rows), default=1)
-        widths = compute_column_widths(rows, column_count)
+        column_count = max((sum(int(m[1]) if (m := re.match(r"__MULTICOLUMN:(\d+)__", cell)) else 1 for cell in row) for row in rows), default=1)
+        widths = compute_column_widths(rows, column_count, 9638 if wide else 4820)
+        for tag, attrs in [("tblW", {"w": str(sum(widths)), "type": "dxa"}), ("tblLayout", {"type": "fixed"})]:
+            old = tblPr.find(qn("w", tag))
+            if old is not None:
+                tblPr.remove(old)
+            node = ET.SubElement(tblPr, qn("w", tag))
+            for key, value in attrs.items():
+                node.set(qn("w", key), value)
         grid = ET.SubElement(tbl, qn("w", "tblGrid"))
         for width in widths:
             col = ET.SubElement(grid, qn("w", "gridCol"))
             col.set(qn("w", "w"), str(width))
         for row_index, row in enumerate(rows):
             tr = ET.SubElement(tbl, qn("w", "tr"))
+            trPr = ET.SubElement(tr, qn("w", "trPr"))
+            ET.SubElement(trPr, qn("w", "cantSplit"))
             if row_index == 0:
-                trPr = ET.SubElement(tr, qn("w", "trPr"))
+                ET.SubElement(trPr, qn("w", "tblHeader"))
                 cnf = ET.SubElement(trPr, qn("w", "cnfStyle"))
                 for key, value in {
                     "val": "100000000000",
@@ -2800,8 +2962,10 @@ class DocxTemplateConverter:
                     cnf.set(qn("w", key), value)
             padded = row + [""] * (column_count - len(row))
             col_index = 0
+            cell_index = 0
             while col_index < column_count:
-                cell_text = padded[col_index]
+                cell_text = padded[cell_index]
+                cell_index += 1
                 span = 1
                 if cell_text.startswith("__MULTICOLUMN:"):
                     end_marker = cell_text.find("__", 14)
@@ -2824,6 +2988,8 @@ class DocxTemplateConverter:
                 if col_index + span - 1 == column_count - 1 and looks_numeric(cell_text):
                     jc = ET.SubElement(pPr, qn("w", "jc"))
                     jc.set(qn("w", "val"), "right")
+                if span == column_count:
+                    ET.SubElement(pPr, qn("w", "keepNext"))
                 if row_index == 0:
                     rPr = ET.SubElement(pPr, qn("w", "rPr"))
                     ET.SubElement(rPr, qn("w", "b"))

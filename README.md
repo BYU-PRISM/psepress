@@ -124,3 +124,39 @@ Keep the same relative paths your manuscript expects.
 - The app does not compile LaTeX; it parses the manuscript source and rebuilds a `.docx` using `template.docx`.
 - The converter is template-aware for this project rather than a general LaTeX-to-Word engine.
 - For best results, upload the same project structure you use locally.
+
+## Conversion fidelity and wide tables
+
+Use `table*` for tables spanning both columns of the final LaTeX article. The
+sample project includes a 17 cm `tabularx` table with a `multicolumn` heading.
+Use ordinary `table` in the single-column review layout.
+
+The Word template recommends a 17.5 cm floating text box, with content no wider
+than 17 cm, positioned at the top or bottom of a page. The converter uses an
+editable 17 cm table in a continuous, single-column section for `table*`, then
+restores two-column text. This permits long tables to span pages, with repeated
+column headings and unsplit rows. It does not reproduce LaTeX float placement
+or the template's floating text box; check the final Word PDF for pagination.
+Captions stay together with the first table row. `multicolumn` cells and
+`addlinespace` are supported. `footnotesize` in a table selects 8 pt content and
+caption text. Rotated labels retain their text horizontally in Word. Column
+widths are estimated from visible content; arbitrary LaTeX column specifications
+and exact row spacing are not reproduced.
+
+Simple preamble `newcommand`/`renewcommand` definitions with zero to nine required
+braced arguments are expanded. Optional arguments, TeX conditionals, and general
+TeX execution are not supported. The converter preserves inline mathematics and
+following prose, numeric `ref` versus typed `autoref`, and common bibliography
+metadata including proceedings, eprints, Unicode accents, and `others` author lists.
+
+The bundled Inter family has regular, italic, medium, and bold faces. The LaTeX
+style uses a synthetic slant of Inter Bold for bold italic text, avoiding the
+previous silent upright substitution. Install the four Inter TTF files from
+`latex_template/fonts` in macOS Font Book (My Fonts), then restart Word. Collections
+are organizational and do not affect availability in Word.
+
+Run converter regression tests from this directory:
+
+```sh
+python -m unittest -v test_latex_to_word
+```
