@@ -160,3 +160,18 @@ Run converter regression tests from this directory:
 ```sh
 python -m unittest -v test_latex_to_word
 ```
+
+### Bibliography wrapping and pagination
+
+DOI wrapping is deterministic and requires no LLM or network service. The
+converter adds discretionary zero-width break opportunities after DOI punctuation.
+Word uses these only when a URL reaches the line boundary; DOIs that fit remain
+on one line. Full visible URLs and hyperlink destinations are preserved, with no
+forced line breaks, abbreviations, or font shrinking. Copied display text may
+contain the invisible U+200B characters; the hyperlink target remains the original
+URL. Very long identifier components can still require a fallback break by Word.
+
+Continuation sections after wide tables do not repeat the first-page header or
+footer. The copyright notice stays together with its license logo. Final page
+counts remain dependent on the word processor and installed fonts; export from
+Microsoft Word to verify final pagination.

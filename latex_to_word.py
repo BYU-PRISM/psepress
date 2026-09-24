@@ -2415,6 +2415,11 @@ class DocxTemplateConverter:
                 body.append(self._paragraph("PSECopyright", self.inline.to_runs(copyright_text)))
                 body.append(self._copyright_logo_paragraph())
 
+        # A section after a wide table is a continuation, not a new title page.
+        if self.final_section is not None and any(isinstance(block, TableBlock) and block.wide for block in self.parsed.blocks):
+            title_page = self.final_section.find(qn("w", "titlePg"))
+            if title_page is not None:
+                self.final_section.remove(title_page)
         body.append(self.final_section if self.final_section is not None else ET.Element(qn("w", "sectPr")))
 
     def _selected_bib_entries(self) -> list[BibEntry]:
@@ -2486,7 +2491,7 @@ class DocxTemplateConverter:
 
     def _format_bib_entry_base(self, entry: BibEntry) -> str:
         fields = entry.fields
-        authors = format_bibtex_names(fields.get("author", ""))
+        authors = format_bibtex_names(fields.get("author", "")).rstrip(".")
         title = clean_bib_value(fields.get("title", ""))
         year = clean_bib_value(fields.get("date", fields.get("year", "")))
         doi = clean_bib_value(fields.get("doi", ""))
@@ -2719,10 +2724,21 @@ class DocxTemplateConverter:
         pPr = ET.SubElement(p, qn("w", "pPr"))
         pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
         pStyle.set(qn("w", "val"), style_id)
+        if style_id == "PSECopyright":
+            ET.SubElement(pPr, qn("w", "keepNext"))
+            ET.SubElement(pPr, qn("w", "keepLines"))
         for run in runs:
             if run.math_node is not None:
                 self._build_math_node(ET.SubElement(p, qn("m", "oMath")), run.math_node)
             elif run.hyperlink:
+                if style_id == "PSECitation" and run.hyperlink.startswith("https://doi.org/") and run.text == run.hyperlink:
+                    # Discretionary, zero-width break opportunities: the layout
+                    # engine uses these only when the URL does not fit. Keep the
+                    # hyperlink destination byte-for-byte unchanged.
+                    run = copy.deepcopy(run)
+                    prefix = "https://doi.org/"
+                    identifier = run.text[len(prefix):]
+                    run.text = prefix + "\u200b" + re.sub(r"([/.-])(?=.)", r"\1" + "\u200b", identifier)
                 hyperlink = ET.SubElement(p, qn("w", "hyperlink"))
                 hyperlink.set(qn("r", "id"), self._hyperlink_rel(run.hyperlink))
                 hyperlink.append(self._run(run))

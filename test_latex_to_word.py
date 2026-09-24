@@ -7,7 +7,7 @@ from xml.etree import ElementTree as ET
 
 from latex_to_word import (LatexParser, InlineLatexConverter, DocxTemplateConverter,
                            BibEntry, compute_column_widths, decode_latex_text,
-                           format_bibtex_names, NS, qn)
+                           format_bibtex_names, RunSpec, NS, qn)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -72,6 +72,32 @@ class ConversionTests(unittest.TestCase):
         self.assertIn('arXiv: 2506.13068 [cs.MA]', result)
         self.assertIn('Advance online publication', result)
 
+    def test_doi_display_and_hyperlink_target(self):
+        converter = DocxTemplateConverter.__new__(DocxTemplateConverter)
+        converter.rel_root = ET.Element("Relationships")
+        converter.hyperlinks = {}
+        url = "https://doi.org/10.1016/j.compchemeng.2026.109650"
+        paragraph = converter._paragraph("PSECitation", [RunSpec("An article. "), RunSpec(url, hyperlink=url)])
+        self.assertIsNone(paragraph.find("w:r/w:br", NS))
+        self.assertIn(url, "".join(paragraph.itertext()).replace("\u200b", ""))
+        self.assertIn("2026.\u200b109650", "".join(paragraph.itertext()))
+        self.assertEqual(list(converter.rel_root)[0].get("Target"), url)
+        other = converter._paragraph("PSEText", [RunSpec(url, hyperlink=url)])
+        self.assertEqual("".join(other.itertext()), url)
+        self.assertIsNone(other.find("w:r/w:br", NS))
+
+    def test_author_terminal_period(self):
+        converter = DocxTemplateConverter.__new__(DocxTemplateConverter)
+        entry = BibEntry("article", "key", {"author": "Smith, Anne and others", "title": "A study", "year": "2026"})
+        self.assertIn("A. Smith, et al. A study.", converter._format_bib_entry(entry))
+        self.assertNotIn("et al..", converter._format_bib_entry(entry))
+
+    def test_copyright_stays_with_logo(self):
+        converter = DocxTemplateConverter.__new__(DocxTemplateConverter)
+        paragraph = converter._paragraph("PSECopyright", [RunSpec("License text")])
+        self.assertIsNotNone(paragraph.find("w:pPr/w:keepLines", NS))
+        self.assertIsNotNone(paragraph.find("w:pPr/w:keepNext", NS))
+
     def test_docx_wide_table_and_inline_math(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
@@ -115,6 +141,9 @@ A & B & C \\
             self.assertTrue(root.findall('.//m:oMath', NS))
             columns = [x.get(qn('w', 'num')) for x in root.findall('.//w:sectPr/w:cols', NS)]
             self.assertEqual(columns[-3:], ['2', '1', '2'])
+            sections = root.findall('.//w:sectPr', NS)
+            self.assertIsNotNone(sections[0].find('w:titlePg', NS))
+            self.assertTrue(all(section.find('w:titlePg', NS) is None for section in sections[1:]))
             for p in root.findall('.//w:p', NS):
                 style = p.find('w:pPr/w:pStyle', NS)
                 if style is not None and style.get(qn('w', 'val')) == 'PSETableCaption':
