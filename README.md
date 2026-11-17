@@ -139,9 +139,10 @@ column headings and unsplit rows. It does not reproduce LaTeX float placement
 or the template's floating text box; check the final Word PDF for pagination.
 Captions stay together with the first table row. `multicolumn` cells and
 `addlinespace` are supported. `footnotesize` in a table selects 8 pt content and
-caption text. Rotated labels retain their text horizontally in Word. Column
-widths are estimated from visible content; arbitrary LaTeX column specifications
-and exact row spacing are not reproduced.
+caption text. Wide tables with `footnotesize` use single spacing and give short
+labels and marks just enough width to leave room for longer text. Rotated labels
+retain their text horizontally in Word. Column widths are estimated from visible
+content; the converter does not reproduce arbitrary LaTeX column specifications.
 
 Simple preamble `newcommand`/`renewcommand` definitions with zero to nine required
 braced arguments are expanded. Optional arguments, TeX conditionals, and general

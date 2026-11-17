@@ -9,8 +9,10 @@ import struct
 import unicodedata
 import zipfile
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import quoteattr
 
 from conference_templates import (
     CONFERENCE_PRESETS,
@@ -88,6 +90,8 @@ for prefix, uri in (
 IGNORABLE_PREFIXES = "w14 w15 w16se w16cid w16 w16cex w16sdtdh w16sdtfl w16du wp14"
 EXTRA_DOCUMENT_NAMESPACES = {
     "mc": MC_NS,
+    "w14": W14_NS,
+    "wp14": WP14_NS,
     "w15": W15_NS,
     "w16cex": W16CEX_NS,
     "w16cid": W16CID_NS,
@@ -103,18 +107,40 @@ def qn(prefix: str, local: str) -> str:
     return f"{{{NS[prefix]}}}{local}"
 
 
-def serialize_xml(root: ET.Element, *, default_namespace: str | None = None) -> bytes:
+def root_namespace_declarations(xml: bytes) -> dict[str, str]:
+    declarations = {}
+    for event, value in ET.iterparse(BytesIO(xml), events=("start-ns", "start")):
+        if event == "start":
+            break
+        prefix, uri = value
+        if prefix:
+            declarations[prefix] = uri
+    return declarations
+
+
+def serialize_xml(
+    root: ET.Element,
+    *,
+    default_namespace: str | None = None,
+    root_namespaces: dict[str, str] | None = None,
+) -> bytes:
     if default_namespace is not None:
         ET.register_namespace("", default_namespace)
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    if not root_namespaces:
+        return xml
+    # ElementTree drops prefixes used only in attribute values such as mc:Ignorable.
+    existing = root_namespace_declarations(xml)
+    declarations = "".join(
+        f" xmlns:{prefix}={quoteattr(uri)}" for prefix, uri in root_namespaces.items() if prefix not in existing
+    )
+    start = re.search(rb"<[\w:.-]+", xml).end()
+    return xml[:start] + declarations.encode("utf-8") + xml[start:]
 
 
 def serialize_document_xml(root: ET.Element) -> bytes:
     root.set(f"{{{MC_NS}}}Ignorable", IGNORABLE_PREFIXES)
-    xml_text = serialize_xml(root).decode("utf-8")
-    namespace_insert = "".join(f' xmlns:{prefix}="{uri}"' for prefix, uri in EXTRA_DOCUMENT_NAMESPACES.items() if prefix != "mc")
-    xml_text = re.sub(r"<w:document\b", "<w:document" + namespace_insert, xml_text, count=1)
-    return xml_text.encode("utf-8")
+    return serialize_xml(root, root_namespaces=EXTRA_DOCUMENT_NAMESPACES)
 
 
 def normalize_space(value: str) -> str:
@@ -1832,7 +1858,9 @@ def strip_embedded_fonts(package_entries: dict[str, bytes]) -> None:
                         retained_font_parts.add(resolve_package_target(font_table_name, rel.attrib.get("Target", "")))
                     else:
                         parent.remove(child)
-        package_entries[font_table_name] = serialize_xml(root)
+        package_entries[font_table_name] = serialize_xml(
+            root, root_namespaces=root_namespace_declarations(package_entries[font_table_name])
+        )
         if rel_root is not None:
             for rel in list(rel_root):
                 if rel.attrib.get("Type") == EMBEDDED_FONT_REL_TYPE and rel.attrib.get("Id", "") not in keep_rel_ids:
@@ -1972,7 +2000,9 @@ def resolve_image_path(base_dir: Path, image_ref: str) -> Path:
     raise FileNotFoundError(f"Could not resolve image referenced from LaTeX: {image_ref}")
 
 
-def compute_column_widths(rows: list[list[str]], col_count: int, total_width: int = 4820) -> list[int]:
+def compute_column_widths(
+    rows: list[list[str]], col_count: int, total_width: int = 4820, *, compact: bool = False
+) -> list[int]:
     if col_count < 1 or total_width < col_count:
         raise ValueError("Table width must accommodate every column.")
     scores = [1] * col_count
@@ -1982,9 +2012,18 @@ def compute_column_widths(rows: list[list[str]], col_count: int, total_width: in
         for index, cell in enumerate(row[:col_count]):
             scores[index] = max(scores[index], len(InlineLatexConverter({}, []).to_plain(cell).strip()))
     minimum = min(400, total_width // col_count)
-    available = total_width - minimum * col_count
-    widths = [minimum + int(available * score / sum(scores)) for score in scores]
-    widths[-1] += total_width - sum(widths)
+    widths = [minimum] * col_count
+    if compact and min(scores) <= 5 < max(scores):
+        # Reserve only the space short labels need at 8 pt and give prose the rest.
+        compact_widths = [max(350, 80 + score * 80) if score <= 5 else minimum for score in scores]
+        if sum(compact_widths) < total_width:
+            widths = compact_widths
+            scores = [score if score > 5 else 0 for score in scores]
+    available = total_width - sum(widths)
+    total_score = sum(scores)
+    widths = [width + available * score // total_score for width, score in zip(widths, scores)]
+    remainder_column = scores.index(max(scores)) if compact else -1
+    widths[remainder_column] += total_width - sum(widths)
     return widths
 
 
@@ -2271,7 +2310,7 @@ class DocxTemplateConverter:
                         if node is None:
                             node = ET.SubElement(props, qn("w", tag))
                         node.set(qn("w", attribute), value)
-            package_entries[name] = serialize_xml(root)
+            package_entries[name] = serialize_xml(root, root_namespaces=root_namespace_declarations(data))
         cleanup_docx_package(package_entries)
 
         with zipfile.ZipFile(self.output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -2384,7 +2423,8 @@ class DocxTemplateConverter:
                 props = caption.find(qn("w", "pPr"))
                 ET.SubElement(props, qn("w", "keepNext"))
                 ET.SubElement(props, qn("w", "keepLines"))
-                table = self._table_element(block.rows, block.wide)
+                compact = block.wide and block.font_half_points == 16
+                table = self._table_element(block.rows, block.wide, compact=compact)
                 if block.font_half_points is not None:
                     for element in (caption, table):
                         for run in element.findall(".//w:r", NS):
@@ -2927,7 +2967,7 @@ class DocxTemplateConverter:
         props.append(section)
         return paragraph
 
-    def _table_element(self, rows: list[list[str]], wide: bool = False) -> ET.Element:
+    def _table_element(self, rows: list[list[str]], wide: bool = False, *, compact: bool = False) -> ET.Element:
         tbl = ET.Element(qn("w", "tbl"))
         tblPr = copy.deepcopy(self.sample_table_pr) if self.sample_table_pr is not None else ET.Element(qn("w", "tblPr"))
         floating = tblPr.find(qn("w", "tblpPr"))
@@ -2944,7 +2984,7 @@ class DocxTemplateConverter:
             node.set(qn("w", "type"), "dxa")
         tbl.append(tblPr)
         column_count = max((sum(int(m[1]) if (m := re.match(r"__MULTICOLUMN:(\d+)__", cell)) else 1 for cell in row) for row in rows), default=1)
-        widths = compute_column_widths(rows, column_count, 9638 if wide else 4820)
+        widths = compute_column_widths(rows, column_count, 9638 if wide else 4820, compact=compact)
         for tag, attrs in [("tblW", {"w": str(sum(widths)), "type": "dxa"}), ("tblLayout", {"type": "fixed"})]:
             old = tblPr.find(qn("w", tag))
             if old is not None:
@@ -3004,11 +3044,16 @@ class DocxTemplateConverter:
                 pPr = ET.SubElement(p, qn("w", "pPr"))
                 pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
                 pStyle.set(qn("w", "val"), "PSETableContent")
+                if span == column_count:
+                    ET.SubElement(pPr, qn("w", "keepNext"))
+                if compact:
+                    ET.SubElement(pPr, qn("w", "spacing"), {
+                        qn("w", "before"): "0", qn("w", "after"): "0",
+                        qn("w", "line"): "240", qn("w", "lineRule"): "auto",
+                    })
                 if col_index + span - 1 == column_count - 1 and looks_numeric(cell_text):
                     jc = ET.SubElement(pPr, qn("w", "jc"))
                     jc.set(qn("w", "val"), "right")
-                if span == column_count:
-                    ET.SubElement(pPr, qn("w", "keepNext"))
                 if row_index == 0:
                     rPr = ET.SubElement(pPr, qn("w", "rPr"))
                     ET.SubElement(rPr, qn("w", "b"))

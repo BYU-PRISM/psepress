@@ -7,7 +7,7 @@ from xml.etree import ElementTree as ET
 
 from latex_to_word import (LatexParser, InlineLatexConverter, DocxTemplateConverter,
                            BibEntry, compute_column_widths, decode_latex_text,
-                           format_bibtex_names, RunSpec, NS, qn)
+                           format_bibtex_names, root_namespace_declarations, RunSpec, NS, qn)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -56,6 +56,10 @@ class ConversionTests(unittest.TestCase):
         self.assertGreater(widths[-1], widths[3])
         self.assertEqual(widths, compute_column_widths(rows[:-1], 8, 9638))
         self.assertTrue(all(w > 0 for w in compute_column_widths(rows, 8)))
+        compact = compute_column_widths(rows, 8, 9638, compact=True)
+        self.assertEqual(sum(compact), 9638)
+        self.assertLess(compact[3], widths[3])
+        self.assertGreater(compact[-1], widths[-1])
 
     def test_bibliography_preserves_metadata(self):
         converter = DocxTemplateConverter.__new__(DocxTemplateConverter)
@@ -120,6 +124,7 @@ class ConversionTests(unittest.TestCase):
 Table~\ref{tab:a} compares $x$.
 
 \begin{table*}[t]
+\footnotesize
 \caption{A table with $x$ and following prose.}
 \label{tab:a}
 \begin{tabular}{lll}
@@ -145,6 +150,10 @@ A & B & C \\
             with zipfile.ZipFile(output) as package:
                 root = ET.fromstring(package.read('word/document.xml'))
                 self.assertNotIn(b'[Remaining Page Headers]', package.read('word/header1.xml'))
+                for name in ('word/document.xml', 'word/header1.xml', 'word/header2.xml', 'word/fontTable.xml'):
+                    xml = package.read(name)
+                    prefixes = ET.fromstring(xml).get(qn('mc', 'Ignorable'), '').split()
+                    self.assertTrue(set(prefixes).issubset(root_namespace_declarations(xml)), name)
             text = ''.join(root.itertext())
             self.assertIn('and following prose.', text)
             self.assertNotIn('sec:intro', text)
@@ -155,6 +164,9 @@ A & B & C \\
             self.assertEqual(len(cells), 2)
             self.assertIn('End', ''.join(cells[-1].itertext()))
             self.assertIsNotNone(table.find('w:tr/w:trPr/w:tblHeader', NS))
+            spacing = table.find('w:tr/w:tc/w:p/w:pPr/w:spacing', NS)
+            self.assertEqual(spacing.get(qn('w', 'line')), '240')
+            self.assertEqual(spacing.get(qn('w', 'lineRule')), 'auto')
             self.assertTrue(root.findall('.//m:oMath', NS))
             columns = [x.get(qn('w', 'num')) for x in root.findall('.//w:sectPr/w:cols', NS)]
             self.assertEqual(columns[-3:], ['2', '1', '2'])
