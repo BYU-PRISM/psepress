@@ -71,6 +71,15 @@ class ConversionTests(unittest.TestCase):
             'primaryclass': 'cs.MA', 'note': 'Advance online publication'}))
         self.assertIn('arXiv: 2506.13068 [cs.MA]', result)
         self.assertIn('Advance online publication', result)
+        online_fields = {'title': 'Workshop', 'organization': 'University', 'year': '2026',
+                         'url': 'https://example.org/workshop', 'note': 'Workshop materials'}
+        result = converter._format_bib_entry(BibEntry('online', 'key', online_fields))
+        for value in ('University', '2026', 'https://example.org/workshop', 'Workshop materials'):
+            self.assertIn(value, result)
+        self.assertNotIn('[accessed', result)
+        online_fields['urldate'] = '2026-11-16'
+        result = converter._format_bib_entry(BibEntry('online', 'key', online_fields))
+        self.assertIn('[accessed 2026-11-16]', result)
 
     def test_doi_display_and_hyperlink_target(self):
         converter = DocxTemplateConverter.__new__(DocxTemplateConverter)
@@ -125,9 +134,17 @@ A & B & C \\
 ''')
             (directory / 'refs.bib').write_text('')
             output = directory / 'result.docx'
-            DocxTemplateConverter(ROOT / 'template.docx', source, output).convert()
+            template = directory / 'template.docx'
+            with zipfile.ZipFile(ROOT / 'template.docx') as original, zipfile.ZipFile(template, 'w') as custom:
+                for name in original.namelist():
+                    data = original.read(name)
+                    if name == 'word/header1.xml':
+                        data = data.replace(b'[Remaining Page s]', b'[Remaining Page Headers]')
+                    custom.writestr(name, data)
+            DocxTemplateConverter(template, source, output).convert()
             with zipfile.ZipFile(output) as package:
                 root = ET.fromstring(package.read('word/document.xml'))
+                self.assertNotIn(b'[Remaining Page Headers]', package.read('word/header1.xml'))
             text = ''.join(root.itertext())
             self.assertIn('and following prose.', text)
             self.assertNotIn('sec:intro', text)

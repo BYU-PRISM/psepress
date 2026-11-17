@@ -2256,7 +2256,7 @@ class DocxTemplateConverter:
             root = ET.fromstring(data)
             for paragraph in root.findall(".//w:p", NS):
                 text = "".join(node.text or "" for node in paragraph.findall(".//w:t", NS))
-                if text.strip() == "[Remaining Page s]":
+                if text.strip() in {"[Remaining Page s]", "[Remaining Page Headers]"}:
                     for node in paragraph.findall(".//w:t", NS):
                         node.text = ""
                 if text.strip() in {"Original Research Article", "Peer Reviewed Conference Proceeding"}:
@@ -2539,11 +2539,14 @@ class DocxTemplateConverter:
             )
         if entry.entry_type == "online":
             author_text = f"{authors}. " if authors else ""
-            accessed = clean_bib_value(fields.get("urldate", "Date"))
-            return normalize_space(
-                f"{author_text}{title}. \\url{{{clean_bib_value(fields.get('url', ''))}}} "
-                f"[accessed {accessed}]"
-            )
+            organization = clean_bib_value(fields.get("organization", ""))
+            publisher = f" {organization}." if organization else ""
+            publication_year = f" ({year})." if year else ""
+            url = clean_bib_value(fields.get("url", ""))
+            link = rf" \url{{{url}}}" if url else ""
+            access_date = clean_bib_value(fields.get("urldate", ""))
+            accessed = f" [accessed {access_date}]" if url and access_date else ""
+            return normalize_space(f"{author_text}{title}.{publisher}{publication_year}{link}{accessed}")
         if entry.entry_type == "techreport":
             institution = clean_bib_value(fields.get("institution", ""))
             return normalize_space(f"{authors}. {title}. {institution} ({year}).{doi_text}")
