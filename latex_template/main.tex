@@ -99,6 +99,23 @@ final article layout. In LaTeX, use \texttt{figure*} or \texttt{table*} only whe
 needs both columns. In the review build there is only one column, so \texttt{figure} and
 \texttt{table} should be preferred.
 
+% Use table (rather than table*) for the single-column review layout.
+\begin{table*}[t]
+  \centering
+  \footnotesize
+  \caption{Example of a page-width table with a grouped heading.}
+  \label{tab:wide-example}
+  \begin{tabularx}{17cm}{lXX}
+    \toprule
+    Case & Method & Interpretation \\
+    \midrule
+    \multicolumn{3}{l}{\emph{Group of related cases}} \\
+    A & A description of the first method & The first result and its context \\
+    B & A description of the second method & The second result and its context \\
+    \bottomrule
+  \end{tabularx}
+\end{table*}
+
 \section{How to CITE REFERENCES IN THE TEXT}
 Text citations should use numbers in square brackets [1] and be placed at the end of the phrase that
 is most appropriate in the context of the sentence, which may or may not be at the end of the
