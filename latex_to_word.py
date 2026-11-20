@@ -2608,7 +2608,7 @@ class DocxTemplateConverter:
         p = ET.Element(qn("w", "p"))
         pPr = ET.SubElement(p, qn("w", "pPr"))
         pStyle = ET.SubElement(pPr, qn("w", "pStyle"))
-        pStyle.set(qn("w", "val"), "PSEParagraph")
+        pStyle.set(qn("w", "val"), "PSE_Text")
         runs = self.inline.to_runs(block.text)
         for run_spec in runs:
             if run_spec.math_node is not None:
